@@ -1,13 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const mockExecFileSync = vi.fn()
-vi.mock('node:child_process', () => ({
-  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
-  execSync: vi.fn(),
-}))
-
-vi.mock('../platform.js', () => ({
-  resolveFromPath: (name: string) => `/usr/local/bin/${name}`,
+// Mock the platform agent-runtime shim — the unit under test now drives
+// the runtime via this interface instead of execFileSync(TMUX, ...). The
+// mocks expose sendKey / sendText / sleepSync as vi.fn so individual
+// tests can assert on call shapes and stub failure modes.
+const mockSendKey = vi.fn<(name: string, key: string) => void>()
+const mockSendText = vi.fn<(name: string, text: string) => void>()
+const mockSleepSync = vi.fn<(ms: number) => void>()
+vi.mock('../platform/agent-runtime.js', () => ({
+  agentRuntime: {
+    sendKey: (name: string, key: string) => mockSendKey(name, key),
+    sendText: (name: string, text: string) => mockSendText(name, text),
+    sleepSync: (ms: number) => mockSleepSync(ms),
+    startSession: vi.fn(),
+    killSession: vi.fn(),
+    hasSession: vi.fn(),
+    listSessions: vi.fn(),
+    capture: vi.fn(),
+  },
 }))
 
 vi.mock('../logger.js', () => ({
@@ -89,11 +99,9 @@ describe('attemptChannelMcpReconnect', () => {
 
     expect(result.ok).toBe(true)
     expect(result.message).toContain('Up x1')
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      '/usr/local/bin/tmux',
-      ['send-keys', '-t', 'marveen-channels', '/mcp', 'Enter'],
-      expect.any(Object),
-    )
+    // /mcp menu open: sendText('/mcp') then sendKey('Enter')
+    expect(mockSendText).toHaveBeenCalledWith('marveen-channels', '/mcp')
+    expect(mockSendKey).toHaveBeenCalledWith('marveen-channels', 'Enter')
   })
 
   it('returns ok:true when plugin found on third Up', () => {
@@ -137,24 +145,23 @@ describe('attemptChannelMcpReconnect', () => {
 
     attemptChannelMcpReconnect('slacker')
 
-    expect(mockExecFileSync).toHaveBeenCalledWith(
-      '/usr/local/bin/tmux',
-      ['send-keys', '-t', 'agent-slacker', 'Escape'],
-      expect.any(Object),
-    )
+    // First call in the function is sendKey(session, 'Escape')
+    expect(mockSendKey).toHaveBeenCalledWith('agent-slacker', 'Escape')
   })
 
   it('sends Escape on error to clean up menu state', () => {
-    mockExecFileSync.mockImplementationOnce(() => { /* Escape */ })
-    mockExecFileSync.mockImplementationOnce(() => { /* sleep */ })
-    mockExecFileSync.mockImplementationOnce(() => { throw new Error('tmux dead') })
+    // Force the second sendKey call to throw (the one after /mcp Enter is
+    // already in flight) so the catch path's cleanup Escape fires.
+    let sendKeyCount = 0
+    mockSendKey.mockImplementation(() => {
+      sendKeyCount++
+      if (sendKeyCount === 2) throw new Error('runtime dead')
+    })
 
     const result = attemptChannelMcpReconnect('marveen')
 
     expect(result.ok).toBe(false)
-    const escapeCalls = mockExecFileSync.mock.calls.filter(
-      (c) => Array.isArray(c[1]) && c[1].includes('Escape'),
-    )
+    const escapeCalls = mockSendKey.mock.calls.filter(c => c[1] === 'Escape')
     expect(escapeCalls.length).toBeGreaterThan(0)
   })
 })
