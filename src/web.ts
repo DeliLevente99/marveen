@@ -14,6 +14,7 @@ import { startMcpListChecker } from './web/mcp-list.js'
 import { startScheduleRunner } from './web/schedule-runner.js'
 import { startChannelPluginMonitor } from './web/channel-monitor.js'
 import { startChannelHealthMonitor } from './web/channel-health-monitor.js'
+import { startMainChannelsSession } from './web/main-channels-session.js'
 import { logger } from './logger.js'
 import { tryHandleProfiles } from './web/routes/profiles.js'
 import { tryHandleMessages } from './web/routes/messages.js'
@@ -209,6 +210,11 @@ export function startWebServer(port = 3420): http.Server {
 
   const scheduleInterval = startScheduleRunner()
   logger.info('Schedule runner started (60s poll)')
+
+  // On Windows the dashboard owns the main channels session lifecycle
+  // (no launchd / systemd equivalent yet). POSIX: no-op — the platform
+  // service already started it before the dashboard came up.
+  startMainChannelsSession()
 
   const pluginMonitorInterval = startChannelPluginMonitor()
   logger.info('Channel plugin health monitor started (60s poll)')

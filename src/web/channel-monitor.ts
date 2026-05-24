@@ -19,6 +19,7 @@ import { getProvider, channelStateDir, type ChannelProviderType } from '../chann
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
 import { agentRuntime } from '../platform/agent-runtime.js'
 import { listProcessTree, buildChildrenMap } from '../platform/process-tree.js'
+import { startMainChannelsSession, stopMainChannelsSession } from './main-channels-session.js'
 
 // CLAUDE() is only needed on POSIX (for tmux respawn-pane in
 // resumeMarveenSession). Lazy resolution lets the module load on Windows
@@ -175,14 +176,22 @@ function triggerMarveenMemorySave(): void {
 }
 
 function resumeMarveenSession(): boolean {
-  // tmux respawn-pane has no Windows equivalent. The main channels
-  // session is also not supervised on Windows yet (no channels.sh
-  // equivalent), so this stage is a no-op there — escalation skips
-  // straight from save to hard-restart, which is also a no-op
-  // (logged below).
+  // Windows: kill the dashboard-managed channels session and respawn
+  // via the same path used at startup. The newly spawned claude will
+  // pick up --continue from the project's prior session if one exists
+  // (startMainChannelsSession's hasPriorClaudeSession check), so the
+  // semantic matches the POSIX tmux respawn-pane behavior.
   if (process.platform === 'win32') {
-    logger.warn('resumeMarveenSession: not supported on Windows yet (no main channels supervisor)')
-    return false
+    try {
+      stopMainChannelsSession()
+      agentRuntime.sleepSync(1500)
+      startMainChannelsSession()
+      logger.warn('Marveen channels session respawned via agent-runtime (Windows)')
+      return true
+    } catch (err) {
+      logger.error({ err }, 'Marveen channels session respawn failed on Windows')
+      return false
+    }
   }
   const provider = getProvider(getMainAgentProvider())
   try {
@@ -206,14 +215,28 @@ let marveenLastHardRestart = 0
 const MARVEEN_HARD_RESTART_GRACE_MS = 120_000
 
 export function hardRestartMarveenChannels(): { ok: boolean; error?: string } {
-  // Windows: there is no launchctl, no systemctl, and (today) no
-  // Task-Scheduler service backing the main channels session. The
-  // installer would need to register one before this is meaningful.
-  // Returning a clear error keeps callers honest about the gap.
+  // Windows: the channels session is dashboard-managed (no launchd /
+  // systemd / Task Scheduler service today). "Hard restart" maps to
+  // killSession + startSession on agent-runtime — equivalent to a
+  // service restart from the agent's point of view, just without the
+  // resilience of an external supervisor (a dashboard crash after kill
+  // but before start would leave the session down until the next
+  // dashboard tick).
   if (process.platform === 'win32') {
-    const msg = 'Hard restart not supported on Windows yet — no channels service registered. See WINDOWS_PORT_PLAN.md.'
-    logger.warn(msg)
-    return { ok: false, error: msg }
+    try {
+      stopMainChannelsSession()
+      // Give the pty-server time to fully release before respawning so
+      // the new process doesn't trip over a half-closed handle.
+      const buf = new SharedArrayBuffer(4)
+      Atomics.wait(new Int32Array(buf), 0, 0, 2000)
+      startMainChannelsSession()
+      marveenLastHardRestart = Date.now()
+      logger.warn('Hard restart: agent-runtime kill+start of main channels session (Windows)')
+      return { ok: true }
+    } catch (err) {
+      logger.error({ err }, 'Windows hard restart failed')
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
   }
   try {
     if (process.platform === 'linux') {
@@ -326,21 +349,14 @@ function shouldEscalateMarveenDown(): boolean {
 
 export function startChannelPluginMonitor(): NodeJS.Timeout {
   const mainProvider = getMainAgentProvider()
-  const isWindows = process.platform === 'win32'
-  if (isWindows) {
-    logger.info('Channel plugin monitor: main-agent target skipped on Windows (no channels service supervisor). Sub-agents monitored normally.')
-  }
 
   function check() {
     type Target = { session: string; isMarveen: boolean; agentName?: string; provider: ChannelProviderType }
-    // Skip the main-agent target on Windows: the marveen-channels
-    // session isn't supervised by the dashboard there (it's a launchd
-    // / systemd service on POSIX, with no equivalent yet on Windows),
-    // so getClaudePidForSession would always return null and the
-    // monitor would loop into endless "down" escalation.
-    const targets: Target[] = isWindows
-      ? []
-      : [{ session: MAIN_CHANNELS_SESSION, isMarveen: true, provider: mainProvider }]
+    // The main channels session exists on POSIX (started by launchd /
+    // systemd via channels.sh) and on Windows (started by
+    // startMainChannelsSession via agent-runtime at dashboard boot).
+    // Either way it's monitored.
+    const targets: Target[] = [{ session: MAIN_CHANNELS_SESSION, isMarveen: true, provider: mainProvider }]
     for (const a of listAgentNames()) {
       if (isAgentRunning(a)) {
         targets.push({
