@@ -1,9 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, delimiter as PATH_DELIMITER } from 'node:path'
 import { homedir } from 'node:os'
-import { execSync, execFileSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { OLLAMA_URL } from '../config.js'
-import { resolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
 import {
   detectPaneState,
@@ -17,9 +16,7 @@ import { CHANNEL_PROVIDER } from '../config.js'
 import { loadProfileTemplate } from './profiles.js'
 import { writeAgentSettingsFromProfile } from './agent-scaffold.js'
 import { getSecret } from './vault.js'
-
-const TMUX = resolveFromPath('tmux')
-const CLAUDE = resolveFromPath('claude')
+import { agentRuntime } from '../platform/agent-runtime.js'
 
 function resolveAgentProvider(name: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(name)
@@ -32,12 +29,65 @@ export function agentSessionName(name: string): string {
 }
 
 export function isAgentRunning(name: string): boolean {
-  try {
-    const output = execSync(`${TMUX} list-sessions -F "#{session_name}"`, { timeout: 3000, encoding: 'utf-8' })
-    return output.split('\n').some(line => line.trim() === agentSessionName(name))
-  } catch {
-    return false
+  return agentRuntime.hasSession(agentSessionName(name))
+}
+
+// Build the env block that the agent's claude process inherits. Mirrors
+// the legacy `export X=... && export Y=...` chain that was baked into the
+// tmux shell-command, just structured so the cross-platform runtime can
+// pass it to spawn() directly (Windows ConPTY) or re-serialize into a
+// shell `export` prefix (POSIX tmux).
+function buildAgentEnv(opts: {
+  dir: string
+  agentChannelDir: string
+  agentProvider: ChannelProviderType
+  isOllama: boolean
+  isDeepseek: boolean
+  deepseekKey: string
+  claudeConfigDir: string | null
+}): Record<string, string> {
+  const env: Record<string, string> = {}
+  // Inherit the dashboard's env as the baseline, then layer agent-specific
+  // overrides. We deliberately COPY rather than reference so deleting a
+  // shadowed token below doesn't unset it in the dashboard process.
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === 'string') env[k] = v
   }
+  // Prepend the same tool-search prefix the legacy shellCmd used so the
+  // claude/bun discovery order is identical to the pre-refactor agent.
+  // POSIX-only paths skip on Windows because:
+  //  (a) `/opt/homebrew/bin:/usr/local/bin/...` joined with `;` (Windows
+  //      PATH separator) creates a single invalid entry that breaks
+  //      PATH lookup for non-prefix tools, and
+  //  (b) Windows installs put claude.exe and bun.exe on PATH directly
+  //      via the installer, so no prefix is needed.
+  const home = process.env.HOME ?? homedir()
+  const pathPrefix = process.platform === 'win32'
+    ? []
+    : ['/opt/homebrew/bin', `${home}/.bun/bin`, '/usr/local/bin', '/usr/bin', '/bin']
+  if (pathPrefix.length > 0) {
+    env.PATH = pathPrefix.join(PATH_DELIMITER) + (env.PATH ? PATH_DELIMITER + env.PATH : '')
+  }
+  // Strip channel tokens that would shadow per-agent state. The plugin
+  // bootstraps its own token from ~/.claude/channels/<provider>/.env.
+  delete env.TELEGRAM_BOT_TOKEN
+  delete env.SLACK_BOT_TOKEN
+  delete env.SLACK_APP_TOKEN
+  const stateEnvVar = opts.agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+  env[stateEnvVar] = opts.agentChannelDir
+  if (opts.agentProvider === 'slack') {
+    env.SLACK_AUDIT_LOG = join(opts.agentChannelDir, 'audit.jsonl')
+  }
+  if (opts.claudeConfigDir) env.CLAUDE_CONFIG_DIR = opts.claudeConfigDir
+  if (opts.isOllama) {
+    env.ANTHROPIC_AUTH_TOKEN = 'ollama'
+    env.ANTHROPIC_BASE_URL = OLLAMA_URL
+  }
+  if (opts.isDeepseek) {
+    env.ANTHROPIC_AUTH_TOKEN = opts.deepseekKey
+    env.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic'
+  }
+  return env
 }
 
 export function startAgentProcess(name: string): { ok: boolean; pid?: number; error?: string } {
@@ -61,37 +111,35 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
   const session = agentSessionName(name)
 
   try {
-    try {
-      execSync(`${TMUX} kill-session -t ${session} 2>/dev/null`, { timeout: 3000 })
-      execSync('sleep 3', { timeout: 5000 })
-    } catch { /* ok */ }
+    // Belt-and-braces session takedown: the isAgentRunning check above
+    // would have returned early if the session was alive, but a stale
+    // tmux session (process gone but tmux server still tracking) could
+    // sit at the same name. killSession is a no-op when nothing's there.
+    agentRuntime.killSession(session)
+    agentRuntime.sleepSync(3000)
 
     const model = readAgentModel(name)
     const isClaude = model.startsWith('claude-')
     const isDeepseek = model.startsWith('deepseek-')
     const isOllama = !isClaude && !isDeepseek
-    const ollamaEnv = isOllama ? `export ANTHROPIC_AUTH_TOKEN=ollama && export ANTHROPIC_BASE_URL=${OLLAMA_URL} && ` : ''
     // DeepSeek's /anthropic base URL accepts the literal Anthropic SDK
     // request format, so Claude Code talks to it as if it were Anthropic.
     // We pull the API key from the encrypted vault (entry id: DEEPSEEK_API_KEY)
     // rather than process.env so operators can rotate it from the dashboard
     // without restarting. We do NOT fail-fast on missing key here -- a 401
-    // from the upstream gives a clearer signal in the agent's tmux pane
-    // than a pre-flight error string the operator would have to dig out of logs.
+    // from the upstream gives a clearer signal in the agent's pane than a
+    // pre-flight error string the operator would have to dig out of logs.
     const deepseekKey = isDeepseek ? (getSecret('DEEPSEEK_API_KEY') ?? '') : ''
-    const deepseekEnv = isDeepseek ? `export ANTHROPIC_AUTH_TOKEN="${deepseekKey}" && export ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic && ` : ''
     // Apply security profile: write allow/deny list into settings.json, and
     // skip the dangerously-skip-permissions flag for strict profiles so
     // Claude Code enforces the list rather than bypassing it.
     const profile = loadProfileTemplate(readAgentSecurityProfile(name))
     writeAgentSettingsFromProfile(name, profile)
-    const skipFlag = profile.permissionMode === 'strict' ? '' : '--dangerously-skip-permissions '
     // Optional per-agent CLAUDE_CONFIG_DIR (alternate Claude Code config dir,
     // e.g. for routing this agent to a separate Anthropic login). When the
     // agent-config field is missing or blank, claudeConfigDir is null and we
     // emit no export, preserving the default Claude Code behavior.
     const claudeConfigDir = readAgentClaudeConfigDir(name)
-    const claudeConfigEnv = claudeConfigDir ? `export CLAUDE_CONFIG_DIR="${claudeConfigDir}" && ` : ''
     // `--continue` requires an existing session; on a brand-new agent the
     // Claude Code projects directory does not yet exist and `claude` exits
     // immediately with an obscure "No deferred tool marker found" error
@@ -101,21 +149,44 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
     const projectsRoot = claudeConfigDir
       ? join(claudeConfigDir, 'projects')
       : join(homedir(), '.claude', 'projects')
-    const encodedProject = dir.replace(/\//g, '-')
+    // Normalize separators before encoding so Windows paths (which contain
+    // backslashes) match Claude Code's projects-dir key format. POSIX is
+    // unaffected since paths only contain forward slashes.
+    const encodedProject = dir.replace(/[\\/]/g, '-')
     const hasPriorSession = existsSync(join(projectsRoot, encodedProject))
-    const continueFlag = hasPriorSession ? '--continue ' : ''
-    const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
-    const unsetTokens = 'unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN'
-    // Slack plugin is third-party; its "not on approved allowlist" check is
-    // bypassed via `allowedChannelPlugins` in /Library/Application Support/ClaudeCode/managed-settings.json.
-    const auditLogEnv = agentProvider === 'slack' ? ` && export SLACK_AUDIT_LOG="${agentChannelDir}/audit.jsonl"` : ''
-    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && export ${stateEnvVar}="${agentChannelDir}"${auditLogEnv} && ${claudeConfigEnv}${ollamaEnv}${deepseekEnv}cd "${dir}" && ${CLAUDE} ${continueFlag}${skipFlag}--model ${model} --channels plugin:${provider.pluginId}`
-    execSync(
-      `${TMUX} new-session -d -s ${session} "${cmd}"`,
-      { timeout: 10000 }
-    )
 
-    logger.info({ name, session, channelDir: agentChannelDir }, 'Agent tmux session started')
+    const env = buildAgentEnv({
+      dir,
+      agentChannelDir,
+      agentProvider,
+      isOllama,
+      isDeepseek,
+      deepseekKey,
+      claudeConfigDir,
+    })
+
+    const claudeArgs: string[] = []
+    if (hasPriorSession) claudeArgs.push('--continue')
+    if (profile.permissionMode !== 'strict') claudeArgs.push('--dangerously-skip-permissions')
+    claudeArgs.push('--model', model)
+    claudeArgs.push('--channels', `plugin:${provider.pluginId}`)
+
+    agentRuntime.startSession({
+      name: session,
+      cwd: dir,
+      command: 'claude',
+      args: claudeArgs,
+      env,
+      // Defense in depth on POSIX: even though buildAgentEnv already
+      // `delete`-d these keys from `env`, a long-running tmux server may
+      // hold them in its inherited globals. The shim emits `unset` for
+      // these before our exports run, so a sub-agent never inherits the
+      // main agent's channel token. See scripts/channels.sh:18-23 for
+      // the leak path this defends against.
+      unsetEnv: ['TELEGRAM_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'],
+    })
+
+    logger.info({ name, session, channelDir: agentChannelDir }, 'Agent session started')
 
     // After a restart with --continue, a session that's been idle for >24h
     // shows the "Resume from summary" modal before the prompt input is ready
@@ -142,8 +213,8 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
 
     return { ok: true }
   } catch (err) {
-    logger.error({ err, name }, 'Failed to start agent tmux session')
-    return { ok: false, error: 'Failed to start tmux session' }
+    logger.error({ err, name }, 'Failed to start agent session')
+    return { ok: false, error: 'Failed to start agent session' }
   }
 }
 
@@ -152,11 +223,11 @@ export function stopAgentProcess(name: string): { ok: boolean; error?: string } 
   if (!isAgentRunning(name)) return { ok: false, error: 'Agent is not running' }
 
   try {
-    execSync(`${TMUX} kill-session -t ${session}`, { timeout: 5000 })
-    execSync('sleep 2', { timeout: 4000 })
-    // Reap any orphaned plugin grandchildren that tmux didn't get.
+    agentRuntime.killSession(session)
+    agentRuntime.sleepSync(2000)
+    // Reap any orphaned plugin grandchildren the runtime didn't get.
     // The plugin writes its pid to the agent's channel state dir;
-    // prefer that, fall back to a env-var-scoped pkill.
+    // prefer that, fall back to an env-var-scoped pkill (POSIX only).
     try {
       const agentProvider = resolveAgentProvider(name)
       const dir = agentDir(name)
@@ -168,14 +239,19 @@ export function stopAgentProcess(name: string): { ok: boolean; error?: string } 
           try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
         }
       }
-      const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
-      execFileSync('/usr/bin/pkill', ['-f', `${stateEnvVar}=${chanDir}`], { timeout: 3000 })
+      if (process.platform !== 'win32') {
+        const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+        execFileSync('/usr/bin/pkill', ['-f', `${stateEnvVar}=${chanDir}`], { timeout: 3000 })
+      }
+      // Windows orphan reap (Get-CimInstance Win32_Process + Stop-Process)
+      // would go here. Deferred — the bot.pid path above is the primary
+      // reaper and covers the common case.
     } catch { /* pkill returns non-zero if no match -- fine */ }
-    logger.info({ name, session }, 'Agent tmux session stopped')
+    logger.info({ name, session }, 'Agent session stopped')
     return { ok: true }
   } catch (err) {
-    logger.error({ err, name, session }, 'Failed to stop agent tmux session')
-    return { ok: false, error: 'Failed to stop tmux session' }
+    logger.error({ err, name, session }, 'Failed to stop agent session')
+    return { ok: false, error: 'Failed to stop agent session' }
   }
 }
 
@@ -199,12 +275,12 @@ const SURVEY_MODAL_RX = /How is Claude doing this session/
 
 function dismissSurveyModalIfPresent(session: string): void {
   try {
-    const pane = execSync(`${TMUX} capture-pane -t ${session} -p`, { timeout: 3000, encoding: 'utf-8' })
-    if (!SURVEY_MODAL_RX.test(pane)) return
-    execFileSync(TMUX, ['send-keys', '-t', session, '0'], { timeout: 5000 })
-    // Modal close is one frame; settle window so the next send-keys lands in
-    // the prompt input, not the now-stale modal handler.
-    execFileSync('/bin/sleep', ['0.3'], { timeout: 2000 })
+    const pane = agentRuntime.capture(session)
+    if (pane == null || !SURVEY_MODAL_RX.test(pane)) return
+    agentRuntime.sendKey(session, '0')
+    // Modal close is one frame; settle window so the next keystroke lands
+    // in the prompt input, not the now-stale modal handler.
+    agentRuntime.sleepSync(300)
     logger.info({ session }, 'Dismissed Claude Code session-rating modal before sending prompt')
   } catch (err) {
     logger.warn({ err, session }, 'Failed to probe/dismiss session-rating modal')
@@ -221,14 +297,14 @@ const RESUME_SUMMARY_MODAL_RX = /Resume from summary/
 
 function dismissResumeSummaryModalIfPresent(session: string): void {
   try {
-    const pane = execSync(`${TMUX} capture-pane -t ${session} -p`, { timeout: 3000, encoding: 'utf-8' })
-    if (!RESUME_SUMMARY_MODAL_RX.test(pane)) return
-    execFileSync(TMUX, ['send-keys', '-t', session, '1'], { timeout: 5000 })
-    execFileSync('/bin/sleep', ['0.1'], { timeout: 2000 })
-    execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+    const pane = agentRuntime.capture(session)
+    if (pane == null || !RESUME_SUMMARY_MODAL_RX.test(pane)) return
+    agentRuntime.sendKey(session, '1')
+    agentRuntime.sleepSync(100)
+    agentRuntime.sendKey(session, 'Enter')
     // /compact starts immediately and can run for minutes; we only need to
     // unblock the modal so detectPaneState can transition off 'unknown'.
-    execFileSync('/bin/sleep', ['0.3'], { timeout: 2000 })
+    agentRuntime.sleepSync(300)
     logger.info({ session }, 'Dismissed Claude Code resume-from-summary modal before sending prompt')
   } catch (err) {
     logger.warn({ err, session }, 'Failed to probe/dismiss resume-from-summary modal')
@@ -243,29 +319,26 @@ function dismissResumeSummaryModalIfPresent(session: string): void {
 // can intervene rather than the loop spinning indefinitely.
 const SUBMIT_RETRY_MAX_ATTEMPTS = 2
 // Wait between sending an Enter and re-capturing the pane. Long enough
-// for tmux to flush the keystroke into the Claude Code TUI and for
-// the TUI to either transition to busy (turn started) or stay idle
+// for the runtime to flush the keystroke into the Claude Code TUI and
+// for the TUI to either transition to busy (turn started) or stay idle
 // with the parked text (still stuck). Empirically 300ms is past the
 // frame-render gap detectPaneState already guards against.
-const SUBMIT_RETRY_POLL_MS = '0.3'
+const SUBMIT_RETRY_POLL_MS = 300
 
 // Buffer-clear (Ctrl-U) used pre-flight when shouldClearTruncatedPreamble
-// flags a stale preamble. Sent as a single key name (no `-l` literal
-// flag) so tmux interprets it as the control sequence.
+// flags a stale preamble in the live input box.
 function clearInputBuffer(session: string): void {
   try {
-    execFileSync(TMUX, ['send-keys', '-t', session, 'C-u'], { timeout: 5000 })
+    agentRuntime.sendKey(session, 'C-u')
     // Settle briefly so the next send-keys lands in the freshly cleared
     // buffer rather than racing the Ctrl-U.
-    execFileSync('/bin/sleep', ['0.1'], { timeout: 2000 })
+    agentRuntime.sleepSync(100)
   } catch (err) {
     logger.warn({ err, session }, 'Failed to clear pane input buffer before send')
   }
 }
 
-// Send text to a tmux session as if typed at the prompt.
-// Uses execFileSync so callers can pass raw text -- tmux send-keys -l treats
-// the argument as literal characters, bypassing shell quoting entirely.
+// Send text to a session as if typed at the prompt.
 //
 // Pre-flight: if the live input box already shows a stale preamble from
 // a previous wrapped message that never fully landed (shouldClearTrun-
@@ -291,38 +364,18 @@ export function sendPromptToSession(session: string, text: string): void {
   // prove the buffer is clean, but proceeding without the clear is no
   // worse than the pre-fix status quo.
   try {
-    const preCapture = execSync(`${TMUX} capture-pane -t ${session} -p`, { timeout: 3000, encoding: 'utf-8' })
-    if (shouldClearTruncatedPreamble(preCapture)) {
+    const preCapture = agentRuntime.capture(session)
+    if (preCapture != null && shouldClearTruncatedPreamble(preCapture)) {
       logger.info({ session }, 'Cleared stale preamble from input buffer before sending prompt')
       clearInputBuffer(session)
     }
   } catch (err) {
-    logger.warn({ err, session }, 'Pre-send capture-pane failed; skipping truncated-preamble check')
+    logger.warn({ err, session }, 'Pre-send capture failed; skipping truncated-preamble check')
   }
 
   const oneLine = text.replace(/\r?\n/g, ' ')
-  const CHUNK = 80
-  // tmux send-keys doesn't support `--` option-terminator, so a chunk that
-  // starts with '-' parses as a flag ("command send-keys: unknown flag -s"
-  // on Hungarian suffixes like -szal/-vel/-ban). Slide the boundary up to a
-  // few chars past any '-' that lands at the start of the next chunk. Capped
-  // so a long run of dashes doesn't inflate one chunk past the paste-detector
-  // threshold; if the cap is reached, prepend a space to the chunk instead.
-  const MAX_SLIDE = 8
-  let i = 0
-  while (i < oneLine.length) {
-    let end = Math.min(i + CHUNK, oneLine.length)
-    let slide = 0
-    while (end < oneLine.length && oneLine[end] === '-' && slide < MAX_SLIDE) {
-      end++; slide++
-    }
-    let chunk = oneLine.slice(i, end)
-    if (chunk.startsWith('-')) chunk = ' ' + chunk
-    execFileSync(TMUX, ['send-keys', '-t', session, '-l', chunk], { timeout: 5000 })
-    i = end
-    if (i < oneLine.length) execFileSync('/bin/sleep', ['0.03'], { timeout: 1000 })
-  }
-  execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+  agentRuntime.sendText(session, oneLine)
+  agentRuntime.sendKey(session, 'Enter')
 
   // Post-send retry loop. The payload hint is the first chunk of oneLine
   // (truncated to a safe length) so the verbatim-stuck path has something
@@ -330,7 +383,7 @@ export function sendPromptToSession(session: string, text: string): void {
   // prompt body into log lines should the give-up branch fire.
   const payloadHint = oneLine.slice(0, Math.min(oneLine.length, 96))
   for (let attempt = 0; ; attempt++) {
-    try { execFileSync('/bin/sleep', [SUBMIT_RETRY_POLL_MS], { timeout: 2000 }) } catch { /* best effort */ }
+    agentRuntime.sleepSync(SUBMIT_RETRY_POLL_MS)
     const pane = capturePane(session)
     const action = decideSubmitFollowup(pane, payloadHint, attempt, SUBMIT_RETRY_MAX_ATTEMPTS)
     if (action === 'done') break
@@ -340,7 +393,7 @@ export function sendPromptToSession(session: string, text: string): void {
     }
     // action === 'retry-enter'
     try {
-      execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 5000 })
+      agentRuntime.sendKey(session, 'Enter')
     } catch (err) {
       logger.warn({ err, session, attempt }, 'Retry-Enter send failed')
       break
@@ -352,19 +405,15 @@ export function sendPromptToSession(session: string, text: string): void {
 // looks idle. The Claude Code UI renders the "idle footer without `esc
 // to interrupt`" line for ~1 frame after a turn submits before the
 // spinner lands; a quarter-second settle window is well past that.
-const PANE_READY_CONFIRM_DELAY_S = '0.25'
+const PANE_READY_CONFIRM_DELAY_MS = 250
 
-// Capture a pane snapshot with an execSync timeout. Null on any error so
-// the caller can treat "capture failed" as "not ready".
+// Capture a pane snapshot. Null on any error so the caller can treat
+// "capture failed" as "not ready".
 export function capturePane(session: string): string | null {
-  try {
-    return execSync(`${TMUX} capture-pane -t ${session} -p`, { timeout: 3000, encoding: 'utf-8' })
-  } catch {
-    return null
-  }
+  return agentRuntime.capture(session)
 }
 
-// Check if a Claude Code tmux session is ready to accept a new prompt.
+// Check if a Claude Code session is ready to accept a new prompt.
 //
 // The detection has two layers, both needed to close the frame-level
 // false-positive that let PR1+PR2's smoke test fire a prompt into a pane
@@ -380,17 +429,16 @@ export function capturePane(session: string): string | null {
 //   2. Double-sample confirmation: if the first capture looks idle, we
 //      sleep 250ms and re-capture. Only agreement from both samples
 //      returns true. Cost on the ready path: ~250ms sleep plus a second
-//      tmux capture-pane round-trip (typically tens of ms). Busy pass
-//      through layer 1 and return immediately without the delay.
+//      capture round-trip (typically tens of ms). Busy pass through
+//      layer 1 and return immediately without the delay.
 export function isSessionReadyForPrompt(session: string): boolean {
   const first = capturePane(session)
   if (first == null) return false
   if (detectPaneState(first) !== 'idle') return false
 
-  try { execFileSync('/bin/sleep', [PANE_READY_CONFIRM_DELAY_S], { timeout: 2000 }) } catch { /* best effort */ }
+  agentRuntime.sleepSync(PANE_READY_CONFIRM_DELAY_MS)
 
   const second = capturePane(session)
   if (second == null) return false
   return detectPaneState(second) === 'idle'
 }
-
