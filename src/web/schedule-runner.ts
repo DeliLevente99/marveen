@@ -1,6 +1,4 @@
 import { join } from 'node:path'
-import { execSync, execFileSync } from 'node:child_process'
-import { resolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
 import {
   PROJECT_ROOT,
@@ -32,11 +30,11 @@ import {
   isAgentRunning,
   isSessionReadyForPrompt,
   sendPromptToSession,
+  capturePane,
 } from './agent-process.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 import { sendTelegramMessage } from './telegram.js'
-
-const TMUX = resolveFromPath('tmux')
+import { agentRuntime } from '../platform/agent-runtime.js'
 
 // --- Schedule Runner ---
 // Checks every minute if any scheduled task is due and injects the prompt
@@ -66,11 +64,7 @@ function attemptFireTask(task: ScheduledTask, agentName: string, now: number): '
     ? task.targetSession
     : isMainAgent ? MAIN_CHANNELS_SESSION : agentSessionName(agentName)
 
-  let sessionExists = false
-  try {
-    const sessions = execSync(`${TMUX} list-sessions -F "#{session_name}"`, { timeout: 3000, encoding: 'utf-8' })
-    sessionExists = sessions.split('\n').some(s => s.trim() === session)
-  } catch { /* no tmux */ }
+  const sessionExists = agentRuntime.hasSession(session)
 
   if (!sessionExists) {
     logger.warn({ task: task.name, agent: agentName, session }, 'Schedule target session not running, skipping')
@@ -122,14 +116,15 @@ function attemptFireTask(task: ScheduledTask, agentName: string, now: number): '
       : `[Utemezett feladat: ${task.name}]`
     const resubmit = (attempt: number) => {
       try {
-        const pane = execFileSync(TMUX, ['capture-pane', '-t', session, '-p'], { timeout: 3000, encoding: 'utf-8' })
+        const pane = capturePane(session)
+        if (pane == null) return
         const stuck = /❯\s+\S/.test(pane) && pane.includes(marker)
         if (!stuck) return
         if (attempt >= 5) {
           logger.warn({ task: task.name, session }, 'Scheduled prompt still stuck after 5 Enter retries -- giving up')
           return
         }
-        execFileSync(TMUX, ['send-keys', '-t', session, 'Enter'], { timeout: 3000 })
+        agentRuntime.sendKey(session, 'Enter')
         setTimeout(() => resubmit(attempt + 1), 3000)
       } catch (err) {
         logger.warn({ err, task: task.name }, 'Post-send resubmit failed')

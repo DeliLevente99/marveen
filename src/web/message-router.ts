@@ -1,5 +1,3 @@
-import { execSync } from 'node:child_process'
-import { resolveFromPath } from '../platform.js'
 import { logger } from '../logger.js'
 import { MAIN_AGENT_ID } from '../config.js'
 import {
@@ -23,8 +21,7 @@ import {
   sendPromptToSession,
 } from './agent-process.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
-
-const TMUX = resolveFromPath('tmux')
+import { agentRuntime } from '../platform/agent-runtime.js'
 
 // A message that cannot be delivered within this window (target session never
 // exists / stays busy) is marked failed so it stops clogging the pending
@@ -57,11 +54,7 @@ export function startMessageRouter(): NodeJS.Timeout {
       const isMainAgent = msg.to_agent === MAIN_AGENT_ID
       const session = isMainAgent ? MAIN_CHANNELS_SESSION : agentSessionName(msg.to_agent)
 
-      let sessionExists = false
-      try {
-        const sessions = execSync(`${TMUX} list-sessions -F "#{session_name}"`, { timeout: 3000, encoding: 'utf-8' })
-        sessionExists = sessions.split('\n').some(s => s.trim() === session)
-      } catch { /* no tmux */ }
+      const sessionExists = agentRuntime.hasSession(session)
 
       if (!sessionExists) {
         if (!routerLoggedMisses.has(msg.id)) {
