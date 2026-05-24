@@ -59,13 +59,73 @@ if ($npmPath) { Write-OK "npm $(& npm -v)" } else { Write-Fail "npm hiányzik"; 
 $gitPath = Test-Cmd 'git'
 if ($gitPath) { Write-OK "git ($(& git --version | Out-String -NoNewline))" } else { Write-Fail "git hiányzik"; $missing += 'Git.Git' }
 
+function Find-ClaudeOnDisk {
+    # Scan known install locations even if claude isn't on PATH —
+    # the npm-global dir is the common case, the standalone Anthropic
+    # installer (when it exists) also lands under LocalAppData. PATH
+    # updates from a freshly-completed `npm install -g` often don't
+    # land until shell restart, so we look at the filesystem too.
+    $candidates = @()
+    try {
+        $npmPrefix = (& npm config get prefix 2>$null).Trim()
+        if ($npmPrefix) {
+            $candidates += (Join-Path $npmPrefix 'claude.cmd')
+            $candidates += (Join-Path $npmPrefix 'claude.exe')
+        }
+    } catch { }
+    $candidates += (Join-Path $env:APPDATA 'npm\claude.cmd')
+    $candidates += (Join-Path $env:LOCALAPPDATA 'Programs\claude\claude.exe')
+    $candidates += (Join-Path $env:LOCALAPPDATA 'AnthropicClaude\claude.exe')
+    foreach ($p in $candidates) {
+        if (Test-Path $p) { return $p }
+    }
+    return $null
+}
+
 $claudePath = Test-Cmd 'claude'
+if (-not $claudePath) {
+    # Not on PATH — maybe installed but the npm-global dir hasn't been
+    # picked up yet. Look at known locations before declaring missing.
+    $disk = Find-ClaudeOnDisk
+    if ($disk) {
+        $claudePath = $disk
+        # Prepend the parent dir to this script's PATH so subsequent
+        # `claude ...` invocations find it without a shell restart.
+        $parent = Split-Path -Parent $disk
+        $env:PATH = "$parent;$env:PATH"
+        Write-Warn "Claude Code megvan ($disk) de nincs a PATH-on -- ideiglenesen hozzáadom ehhez a session-höz"
+        Write-Warn "Tartós: System Properties -> Environment Variables -> User PATH -> add $parent"
+    }
+}
+
 if ($claudePath) {
-    Write-OK "Claude Code $(& claude --version 2>&1 | Select-Object -First 1)"
+    Write-OK "Claude Code $(& claude --version 2>&1 | Select-Object -First 1) ($claudePath)"
 } else {
-    Write-Fail "Claude Code CLI hiányzik"
-    Write-Warn "Manuálisan: npm install -g @anthropic-ai/claude-code"
-    $missing += 'manual:claude'
+    Write-Warn "Claude Code CLI nincs telepítve."
+    $auto = Read-Host "Telepítsem most npm-en át (npm install -g @anthropic-ai/claude-code)? (i/n) [i]"
+    if ($auto -ne 'n') {
+        Write-Host "  npm install -g @anthropic-ai/claude-code..."
+        & npm install -g '@anthropic-ai/claude-code'
+        if ($LASTEXITCODE -eq 0) {
+            $disk = Find-ClaudeOnDisk
+            if ($disk) {
+                $claudePath = $disk
+                $parent = Split-Path -Parent $disk
+                $env:PATH = "$parent;$env:PATH"
+                Write-OK "Claude Code telepítve: $disk"
+            } else {
+                Write-Warn "npm install lefutott de claude.cmd nincs hol lenni kellene. Nyiss új shell-t és próbáld újra."
+                $missing += 'claude:rerun'
+            }
+        } else {
+            Write-Fail "npm install -g elhasalt. Telepítsd kézzel és próbáld újra:"
+            Write-Host "    npm install -g @anthropic-ai/claude-code" -ForegroundColor Cyan
+            $missing += 'manual:claude'
+        }
+    } else {
+        Write-Skip "Telepítés kihagyva. Manuálisan: npm install -g @anthropic-ai/claude-code"
+        $missing += 'manual:claude'
+    }
 }
 
 $bunPath = Test-Cmd 'bun'
