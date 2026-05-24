@@ -183,6 +183,10 @@ export function createWinAgentRuntime(): AgentRuntime {
       rpc('sendKey', { name, key })
     },
 
+    getSessionPid(name: SessionName): number | null {
+      return rpc<number | null>('pid', { name })
+    },
+
     sleepSync(ms: number): void {
       // Safe to block the main thread here: all ptys live in the
       // pty-server child process, so its libuv keeps pumping while we

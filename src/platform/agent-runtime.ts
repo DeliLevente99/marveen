@@ -87,6 +87,21 @@ export interface AgentRuntime {
   sendKey(name: SessionName, key: string): void
 
   /**
+   * Return the OS PID of the process running inside the named session,
+   * or null if the session doesn't exist or its PID can't be determined.
+   *
+   * POSIX: `tmux list-panes -t NAME -F '#{pane_pid}'` — the shell PID
+   *   tmux spawned. The actual claude grandchild may be deeper in the
+   *   tree; callers walk the process tree from there.
+   * Windows: the PID of the process spawned inside the pty (the
+   *   pty-server child tracks this from pty.spawn return).
+   *
+   * Used by channel-monitor.ts to anchor a process-tree walk that
+   * verifies the channel plugin (a grandchild of claude) is alive.
+   */
+  getSessionPid(name: SessionName): number | null
+
+  /**
    * Block the calling thread for ms milliseconds. The legacy agent-process
    * code relies on synchronous sleeps to order send-keys/capture-pane pairs
    * around tmux's render cycle. This preserves that timing on both

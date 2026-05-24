@@ -165,6 +165,13 @@ function handle(method: string, body: Record<string, unknown>): RpcResponse {
         return { ok: true, result: stripAnsi(s.buf.join('')) }
       }
 
+      case 'pid': {
+        const name = String(body.name ?? '')
+        const s = sessions.get(name)
+        if (!s || s.exited) return { ok: true, result: null }
+        return { ok: true, result: s.pty.pid }
+      }
+
       case 'sendText': {
         const name = String(body.name ?? '')
         const text = String(body.text ?? '')

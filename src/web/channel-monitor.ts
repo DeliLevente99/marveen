@@ -17,15 +17,13 @@ import { MAIN_CHANNELS_SESSION, MAIN_CHANNELS_PLIST } from './main-agent.js'
 import { notifyChannel } from '../notify.js'
 import { getProvider, channelStateDir, type ChannelProviderType } from '../channel-provider.js'
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
+import { agentRuntime } from '../platform/agent-runtime.js'
+import { listProcessTree, buildChildrenMap } from '../platform/process-tree.js'
 
-// Lazy: this module's tmux process-tree walking and respawn-pane usage
-// have no Windows equivalent yet. Don't throw at import time so the
-// dashboard boots on Windows; the calls below throw at use time if/when
-// the monitor logic actually runs (which it does only on POSIX where
-// tmux IS present).
-let _tmux: string | undefined
+// CLAUDE() is only needed on POSIX (for tmux respawn-pane in
+// resumeMarveenSession). Lazy resolution lets the module load on Windows
+// even if `claude` isn't on PATH at startup.
 let _claude: string | undefined
-const TMUX = () => (_tmux ??= resolveFromPath('tmux'))
 const CLAUDE = () => (_claude ??= resolveFromPath('claude'))
 
 function resolveAgentProvider(name: string): ChannelProviderType {
@@ -41,14 +39,20 @@ function resolveAgentProvider(name: string): ChannelProviderType {
 // killing it would terminate the live agent.
 
 function getClaudePidForSession(session: string): number | null {
+  // Anchor PID: agent-runtime gives us the session's tracked process
+  // (the tmux pane's shell on POSIX, the pty-spawned process on Win).
+  const anchor = agentRuntime.getSessionPid(session)
+  if (anchor == null) return null
+  // POSIX: the pane PID is the shell, and `claude` is its child. On
+  // Windows the pty-spawned PID IS the claude process directly (we
+  // spawn claude.exe without a shell wrapper). Branch to keep the
+  // pgrep-based child resolution POSIX-only.
+  if (process.platform === 'win32') return anchor
   try {
-    const out = execFileSync(TMUX(), ['list-panes', '-t', session, '-F', '#{pane_pid}'], { timeout: 3000, encoding: 'utf-8' })
-    const panePid = parseInt(out.trim().split('\n')[0], 10)
-    if (!panePid) return null
-    const cmd = execFileSync('/bin/ps', ['-p', String(panePid), '-o', 'comm='], { timeout: 3000, encoding: 'utf-8' }).trim()
-    if (cmd === 'claude' || cmd.endsWith('/claude')) return panePid
+    const cmd = execFileSync('/bin/ps', ['-p', String(anchor), '-o', 'comm='], { timeout: 3000, encoding: 'utf-8' }).trim()
+    if (cmd === 'claude' || cmd.endsWith('/claude')) return anchor
     try {
-      const child = execFileSync('/usr/bin/pgrep', ['-P', String(panePid), '-x', 'claude'], { timeout: 3000, encoding: 'utf-8' }).trim()
+      const child = execFileSync('/usr/bin/pgrep', ['-P', String(anchor), '-x', 'claude'], { timeout: 3000, encoding: 'utf-8' }).trim()
       if (child) return parseInt(child.split('\n')[0], 10)
     } catch { /* none */ }
     return null
@@ -59,20 +63,10 @@ function getClaudePidForSession(session: string): number | null {
 
 function hasChannelPluginAlive(claudePid: number, providerType: ChannelProviderType, agentName?: string): boolean {
   try {
-    const ps = execFileSync('/bin/ps', ['-axo', 'pid,ppid,command'], { timeout: 3000, encoding: 'utf-8' })
-    const lines = ps.split('\n').slice(1)
-    const childrenOf = new Map<number, number[]>()
+    const rows = listProcessTree()
+    const childrenOf = buildChildrenMap(rows)
     const cmdOf = new Map<number, string>()
-    for (const line of lines) {
-      const m = line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/)
-      if (!m) continue
-      const pid = parseInt(m[1], 10)
-      const ppid = parseInt(m[2], 10)
-      cmdOf.set(pid, m[3])
-      const arr = childrenOf.get(ppid) || []
-      arr.push(pid)
-      childrenOf.set(ppid, arr)
-    }
+    for (const r of rows) cmdOf.set(r.pid, r.cmd)
 
     const stack = [claudePid]
     const seen = new Set<number>()
@@ -181,14 +175,24 @@ function triggerMarveenMemorySave(): void {
 }
 
 function resumeMarveenSession(): boolean {
+  // tmux respawn-pane has no Windows equivalent. The main channels
+  // session is also not supervised on Windows yet (no channels.sh
+  // equivalent), so this stage is a no-op there — escalation skips
+  // straight from save to hard-restart, which is also a no-op
+  // (logged below).
+  if (process.platform === 'win32') {
+    logger.warn('resumeMarveenSession: not supported on Windows yet (no main channels supervisor)')
+    return false
+  }
   const provider = getProvider(getMainAgentProvider())
   try {
+    const tmuxBin = resolveFromPath('tmux')
     const claudeCmd = [
       'export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
       '&&', CLAUDE(), '--continue', '--dangerously-skip-permissions',
       `--channels plugin:${provider.pluginId}`,
     ].join(' ')
-    execFileSync(TMUX(), ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
+    execFileSync(tmuxBin, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
     logger.warn({ provider: provider.type }, 'Marveen session respawned with --continue')
     return true
   } catch (err) {
@@ -202,6 +206,15 @@ let marveenLastHardRestart = 0
 const MARVEEN_HARD_RESTART_GRACE_MS = 120_000
 
 export function hardRestartMarveenChannels(): { ok: boolean; error?: string } {
+  // Windows: there is no launchctl, no systemctl, and (today) no
+  // Task-Scheduler service backing the main channels session. The
+  // installer would need to register one before this is meaningful.
+  // Returning a clear error keeps callers honest about the gap.
+  if (process.platform === 'win32') {
+    const msg = 'Hard restart not supported on Windows yet — no channels service registered. See WINDOWS_PORT_PLAN.md.'
+    logger.warn(msg)
+    return { ok: false, error: msg }
+  }
   try {
     if (process.platform === 'linux') {
       const unit = `${MAIN_AGENT_ID}-channels.service`
@@ -313,10 +326,21 @@ function shouldEscalateMarveenDown(): boolean {
 
 export function startChannelPluginMonitor(): NodeJS.Timeout {
   const mainProvider = getMainAgentProvider()
+  const isWindows = process.platform === 'win32'
+  if (isWindows) {
+    logger.info('Channel plugin monitor: main-agent target skipped on Windows (no channels service supervisor). Sub-agents monitored normally.')
+  }
 
   function check() {
     type Target = { session: string; isMarveen: boolean; agentName?: string; provider: ChannelProviderType }
-    const targets: Target[] = [{ session: MAIN_CHANNELS_SESSION, isMarveen: true, provider: mainProvider }]
+    // Skip the main-agent target on Windows: the marveen-channels
+    // session isn't supervised by the dashboard there (it's a launchd
+    // / systemd service on POSIX, with no equivalent yet on Windows),
+    // so getClaudePidForSession would always return null and the
+    // monitor would loop into endless "down" escalation.
+    const targets: Target[] = isWindows
+      ? []
+      : [{ session: MAIN_CHANNELS_SESSION, isMarveen: true, provider: mainProvider }]
     for (const a of listAgentNames()) {
       if (isAgentRunning(a)) {
         targets.push({

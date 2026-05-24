@@ -136,6 +136,19 @@ export function createPosixAgentRuntime(): AgentRuntime {
     execFileSync(TMUX, ['send-keys', '-t', name, key], { timeout: 5000 })
   }
 
+  function getSessionPid(name: SessionName): number | null {
+    try {
+      const raw = execFileSync(TMUX, ['list-panes', '-t', name, '-F', '#{pane_pid}'], {
+        timeout: 3000, encoding: 'utf-8',
+      }).trim()
+      const first = raw.split('\n')[0]?.trim()
+      const pid = parseInt(first ?? '', 10)
+      return Number.isFinite(pid) && pid > 0 ? pid : null
+    } catch {
+      return null
+    }
+  }
+
   function sleepSync(ms: number): void {
     // Preserve the legacy `/bin/sleep` invocation so POSIX behavior is
     // byte-identical. Atomics.wait would also work but would diverge
@@ -148,5 +161,5 @@ export function createPosixAgentRuntime(): AgentRuntime {
     } catch { /* best effort */ }
   }
 
-  return { startSession, killSession, hasSession, listSessions, capture, sendText, sendKey, sleepSync }
+  return { startSession, killSession, hasSession, listSessions, capture, sendText, sendKey, getSessionPid, sleepSync }
 }
