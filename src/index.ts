@@ -7,7 +7,8 @@ import {
   writeSync,
 } from 'node:fs'
 import { join } from 'node:path'
-import { execFileSync, execSync } from 'node:child_process'
+// node:child_process no longer needed here — process-lock I/O moved to
+// platform/process-lock-context.ts.
 import type { Server as HttpServer } from 'node:http'
 import { STORE_DIR, PID_FILENAME, WEB_PORT, ALLOWED_CHAT_ID, MAIN_AGENT_ID } from './config.js'
 import { initDatabase } from './db.js'
@@ -26,6 +27,7 @@ import {
   type ProcessLockContext,
   type PidfileLockContext,
 } from './process-lock.js'
+import { buildProcessLockContext } from './platform/process-lock-context.js'
 
 const BANNER = `
  ██████╗██╗      █████╗ ██╗   ██╗██████╗ ███████╗
@@ -55,89 +57,9 @@ const SHUTDOWN_HARD_KILL_MS = 5000
 // those files would get SIGKILLed on startup.
 const DASHBOARD_BINARY_PATTERN = /(?:^|[\s/])(?:dist\/index\.js|src\/index\.ts)(?:\s|$)/
 
-// Build the I/O surface used by process-lock.ts. Kept here so the pure
-// module stays testable with a mock ctx and never imports node:child_process
-// or node:fs directly.
-function buildProcessLockContext(): ProcessLockContext {
-  const uid = typeof process.getuid === 'function' ? process.getuid() : null
-  return {
-    currentPid: process.pid,
-    uid,
-    listPortHolders(port: number): number[] {
-      try {
-        const raw = execSync(`lsof -ti :${port} 2>/dev/null || true`, { timeout: 3000, encoding: 'utf-8' }).trim()
-        if (!raw) return []
-        return raw.split('\n').map((s) => parseInt(s.trim(), 10)).filter((n) => Number.isFinite(n) && n > 0)
-      } catch {
-        return []
-      }
-    },
-    listOwnProcessesMatching(pattern: RegExp): number[] {
-      // `ps -A -o pid=,uid=,args=` emits `<pid> <uid> <full argv>` per row.
-      // Filter to own-UID rows whose argv matches `pattern`. Known edge
-      // case: an argv that contains a literal newline will be split across
-      // physical lines; such rows are dropped. Not a practical concern for
-      // node/tsx invocations, but worth noting.
-      try {
-        const raw = execFileSync('/bin/ps', ['-Ao', 'pid=,uid=,args='], { timeout: 3000, encoding: 'utf-8' })
-        const out: number[] = []
-        for (const line of raw.split('\n')) {
-          const trimmed = line.trimStart()
-          if (!trimmed) continue
-          const m = trimmed.match(/^(\d+)\s+(\d+)\s+(.*)$/)
-          if (!m) continue
-          const pid = parseInt(m[1], 10)
-          const rowUid = parseInt(m[2], 10)
-          const argv = m[3]
-          if (!Number.isFinite(pid) || pid <= 0) continue
-          if (pid === process.pid) continue
-          if (uid != null && rowUid !== uid) continue
-          if (!pattern.test(argv)) continue
-          out.push(pid)
-        }
-        return out
-      } catch {
-        return []
-      }
-    },
-    getProcessCommand(pid: number): string | null {
-      try {
-        return execFileSync('/bin/ps', ['-p', String(pid), '-o', 'comm='], { timeout: 2000, encoding: 'utf-8' }).trim() || null
-      } catch {
-        return null
-      }
-    },
-    getProcessUid(pid: number): number | null {
-      try {
-        const out = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'uid='], { timeout: 2000, encoding: 'utf-8' }).trim()
-        const parsed = parseInt(out, 10)
-        return Number.isFinite(parsed) ? parsed : null
-      } catch {
-        return null
-      }
-    },
-    signal(pid: number, sig): 'sent' | 'gone' {
-      try {
-        process.kill(pid, sig as NodeJS.Signals | 0)
-        return 'sent'
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException)?.code
-        if (code === 'ESRCH') return 'gone'
-        // EPERM and others: the process exists but we can't probe. Rethrow
-        // so callers treat it as "still alive".
-        throw err
-      }
-    },
-    sleep(ms: number): Promise<void> {
-      return new Promise((resolve) => setTimeout(resolve, ms))
-    },
-    log: {
-      info: (obj, msg) => logger.info(obj, msg),
-      warn: (obj, msg) => logger.warn(obj, msg),
-      error: (obj, msg) => logger.error(obj, msg),
-    },
-  }
-}
+// Process-lock I/O surface moved to src/platform/process-lock-context.ts
+// so the Windows backend (PowerShell-based, since lsof/ps don't exist)
+// can live alongside the POSIX one without bloating index.ts.
 
 function readRecordedPidFrom(path: string): number | null {
   try {
