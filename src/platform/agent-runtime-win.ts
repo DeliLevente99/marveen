@@ -41,27 +41,46 @@ function pickStateDir(): string {
 
 const STATE_DIR = pickStateDir()
 const PORT_FILE = join(STATE_DIR, `pty-server-${process.pid}.port`)
-const SERVER_SCRIPT = join(__dirname, 'pty-server.js')
+
+// Locate pty-server. `npm run build` produces dist/platform/pty-server.js;
+// `npm run dev` runs the .ts source via tsx so __dirname is src/platform/
+// and the .ts source is what we should hand the child. Prefer dist/ when
+// it exists (faster startup, no tsx transpile), fall back to src/.ts.
+function resolveServerScript(): { path: string; runner: 'node' | 'tsx' } {
+  const localJs = join(__dirname, 'pty-server.js')
+  if (existsSync(localJs)) return { path: localJs, runner: 'node' }
+  const localTs = join(__dirname, 'pty-server.ts')
+  if (existsSync(localTs)) return { path: localTs, runner: 'tsx' }
+  // Last-ditch search relative to cwd in case __dirname is somewhere odd.
+  const distFallback = join(process.cwd(), 'dist', 'platform', 'pty-server.js')
+  if (existsSync(distFallback)) return { path: distFallback, runner: 'node' }
+  throw new Error(
+    `agent-runtime-win: pty-server.{js,ts} not found near ${__dirname}. ` +
+    `Run \`npm run build\` (or \`npm run dev\` from project root).`,
+  )
+}
 
 let serverPort: number | null = null
 
 function ensureServer(): number {
   if (serverPort != null) return serverPort
 
-  if (!existsSync(SERVER_SCRIPT)) {
-    throw new Error(
-      `agent-runtime-win: pty-server.js not found at ${SERVER_SCRIPT}. ` +
-      `Run \`npm run build\` to compile it.`,
-    )
-  }
+  const { path: scriptPath, runner } = resolveServerScript()
 
   // Clean any stale port file from a previous run with the same PID
   // (PID recycling on long-lived systems is real even if rare).
   try { unlinkSync(PORT_FILE) } catch { /* fine */ }
 
+  // For tsx-runner mode we invoke node with tsx as a register, so the
+  // child can directly import the .ts source. The parent already has
+  // tsx as a runtime dep (it's used by `npm run dev`).
+  const nodeArgs = runner === 'tsx'
+    ? ['--import', 'tsx', scriptPath, `--port-file=${PORT_FILE}`, `--parent-pid=${process.pid}`]
+    : [scriptPath, `--port-file=${PORT_FILE}`, `--parent-pid=${process.pid}`]
+
   const child = spawn(
     process.execPath,
-    [SERVER_SCRIPT, `--port-file=${PORT_FILE}`, `--parent-pid=${process.pid}`],
+    nodeArgs,
     {
       // Detached so it survives a parent-process SIGTERM; stdio:'ignore'
       // so the parent doesn't keep its pipes open and block exit. The

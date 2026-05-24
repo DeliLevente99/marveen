@@ -17,8 +17,12 @@ export const PLATFORM: PlatformType = detect()
 
 export function resolveFromPath(name: string): string {
   if (!/^[a-zA-Z0-9._-]+$/.test(name)) throw new Error('Invalid binary name: ' + name)
+  const cmd = process.platform === 'win32' ? `where ${name}` : `which ${name}`
   try {
-    return execSync(`which ${name}`, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    // `where` returns one path per line (one per PATH match); take the
+    // first. `which` returns one line. trim() + split('\n')[0] handles
+    // both uniformly.
+    return execSync(cmd, { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('\n')[0].trim()
   } catch {
     throw new Error(`Required binary not found on PATH: ${name}`)
   }

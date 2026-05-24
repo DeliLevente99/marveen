@@ -10,8 +10,14 @@ import { logger } from '../../logger.js'
 import { readBody, json } from '../http-helpers.js'
 import type { RouteContext } from './types.js'
 
-const TMUX = resolveFromPath('tmux')
-const CLAUDE = resolveFromPath('claude')
+// Lazy: this module's tmux-based background-job spawn pattern has no
+// Windows equivalent yet (the shim's capture has fewer scrollback rows
+// than `tmux capture-pane -S -500`). Don't throw at import time so the
+// dashboard boots on Windows; throw at use time if/when invoked.
+let _tmux: string | undefined
+let _claude: string | undefined
+const TMUX = () => (_tmux ??= resolveFromPath('tmux'))
+const CLAUDE = () => (_claude ??= resolveFromPath('claude'))
 const MAX_CONCURRENT = 3
 const TIMEOUT_MS = 30 * 60 * 1000
 
@@ -23,7 +29,7 @@ function bgSessionName(id: string): string {
 
 function isBgSessionAlive(session: string): boolean {
   try {
-    const out = execFileSync(TMUX, ['list-sessions', '-F', '#{session_name}'], { timeout: 3000, encoding: 'utf-8' })
+    const out = execFileSync(TMUX(), ['list-sessions', '-F', '#{session_name}'], { timeout: 3000, encoding: 'utf-8' })
     return out.split('\n').some(l => l.trim() === session)
   } catch {
     return false
@@ -32,7 +38,7 @@ function isBgSessionAlive(session: string): boolean {
 
 function captureSession(session: string): string | null {
   try {
-    return execFileSync(TMUX, ['capture-pane', '-t', session, '-p', '-S', '-500'], { timeout: 5000, encoding: 'utf-8' })
+    return execFileSync(TMUX(), ['capture-pane', '-t', session, '-p', '-S', '-500'], { timeout: 5000, encoding: 'utf-8' })
   } catch {
     return null
   }
@@ -40,7 +46,7 @@ function captureSession(session: string): string | null {
 
 function killSession(session: string): void {
   try {
-    execFileSync(TMUX, ['kill-session', '-t', session], { timeout: 3000 })
+    execFileSync(TMUX(), ['kill-session', '-t', session], { timeout: 3000 })
   } catch { /* already dead */ }
 }
 
@@ -55,11 +61,11 @@ export function spawnBackgroundTask(agentId: string, prompt: string): Background
 
   const shellCmd = [
     `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH"`,
-    `${CLAUDE} -p "$BG_PROMPT" --output-format text 2>&1`,
+    `${CLAUDE()} -p "$BG_PROMPT" --output-format text 2>&1`,
   ].join(' && ')
 
   try {
-    execFileSync(TMUX, [
+    execFileSync(TMUX(), [
       'new-session', '-d', '-s', session, '-x', '200', '-y', '50',
       `${shellCmd}; echo '___BG_DONE___'; sleep 5`,
     ], {

@@ -18,8 +18,15 @@ import { notifyChannel } from '../notify.js'
 import { getProvider, channelStateDir, type ChannelProviderType } from '../channel-provider.js'
 import { attemptChannelMcpReconnect } from './channel-mcp-reconnect.js'
 
-const TMUX = resolveFromPath('tmux')
-const CLAUDE = resolveFromPath('claude')
+// Lazy: this module's tmux process-tree walking and respawn-pane usage
+// have no Windows equivalent yet. Don't throw at import time so the
+// dashboard boots on Windows; the calls below throw at use time if/when
+// the monitor logic actually runs (which it does only on POSIX where
+// tmux IS present).
+let _tmux: string | undefined
+let _claude: string | undefined
+const TMUX = () => (_tmux ??= resolveFromPath('tmux'))
+const CLAUDE = () => (_claude ??= resolveFromPath('claude'))
 
 function resolveAgentProvider(name: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(name)
@@ -35,7 +42,7 @@ function resolveAgentProvider(name: string): ChannelProviderType {
 
 function getClaudePidForSession(session: string): number | null {
   try {
-    const out = execFileSync(TMUX, ['list-panes', '-t', session, '-F', '#{pane_pid}'], { timeout: 3000, encoding: 'utf-8' })
+    const out = execFileSync(TMUX(), ['list-panes', '-t', session, '-F', '#{pane_pid}'], { timeout: 3000, encoding: 'utf-8' })
     const panePid = parseInt(out.trim().split('\n')[0], 10)
     if (!panePid) return null
     const cmd = execFileSync('/bin/ps', ['-p', String(panePid), '-o', 'comm='], { timeout: 3000, encoding: 'utf-8' }).trim()
@@ -178,10 +185,10 @@ function resumeMarveenSession(): boolean {
   try {
     const claudeCmd = [
       'export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
-      '&&', CLAUDE, '--continue', '--dangerously-skip-permissions',
+      '&&', CLAUDE(), '--continue', '--dangerously-skip-permissions',
       `--channels plugin:${provider.pluginId}`,
     ].join(' ')
-    execFileSync(TMUX, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
+    execFileSync(TMUX(), ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
     logger.warn({ provider: provider.type }, 'Marveen session respawned with --continue')
     return true
   } catch (err) {
