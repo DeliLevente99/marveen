@@ -69,7 +69,14 @@ describe('isManagedSettingsReady (algorithm)', () => {
   })
 })
 
-describe('getManagedSettingsSudoCommand merge logic', () => {
+// These tests exec the generated sudo-command in a child shell to
+// validate its merge semantics, and the command uses python3 in a pipe.
+// Windows has no python3 alias (only `python`), and the pipe syntax
+// differs between cmd.exe and PowerShell. The merge logic itself is
+// pure-Node JSON manipulation — porting the harness to spawnSync
+// + an inline Node script is tracked in the Windows port plan;
+// skipped here until then.
+describe.skipIf(process.platform === 'win32')('getManagedSettingsSudoCommand merge logic', () => {
   function runMerge(existingContent: string | null, targetPath: string): Record<string, unknown> {
     const cmd = getManagedSettingsSudoCommand()
     const pipeIdx = cmd.indexOf('|')

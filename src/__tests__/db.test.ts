@@ -238,7 +238,13 @@ describe('pending task retries', () => {
   })
 })
 
-describe('database file permissions', () => {
+// File-permission tests assert chmod(0o600) on the SQLite main file +
+// WAL/SHM/journal sidecars. chmod is a no-op on Windows (NTFS uses ACLs,
+// not POSIX mode bits), so the mode read-back stays at the OS default
+// and the equality assertion fails. The Windows port plan calls for an
+// ACL-based tighten helper (icacls or SetNamedSecurityInfo) tracked
+// separately; until that lands, skip these tests on win32.
+describe.skipIf(process.platform === 'win32')('database file permissions', () => {
   // Enforcement (not just observation): loosen every sidecar to 0o644
   // first, then re-run initDatabase() to prove tightenDbPermissions
   // actually narrows them. Without this, the tests would pass even if
