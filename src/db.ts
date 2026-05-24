@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3'
 import { join } from 'node:path'
-import { existsSync, mkdirSync, readFileSync, renameSync, chmodSync, openSync, closeSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, openSync, closeSync } from 'node:fs'
 import { STORE_DIR, DB_FILENAME, ALLOWED_CHAT_ID, OLLAMA_URL } from './config.js'
 import { logger } from './logger.js'
+import { tightenToOwnerOnly } from './platform/file-acl.js'
 
 let db: Database.Database
 
@@ -23,7 +24,7 @@ function tightenDbPermissions(dbPath: string): void {
   const sidecars = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]
   for (const path of sidecars) {
     if (!existsSync(path)) continue
-    try { chmodSync(path, 0o600) } catch (err) {
+    try { tightenToOwnerOnly(path) } catch (err) {
       logger.warn({ err, path }, 'Failed to tighten DB file permissions')
     }
   }
