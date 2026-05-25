@@ -176,10 +176,15 @@ function triggerMarveenMemorySave(): void {
 function resumeMarveenSession(): boolean {
   const provider = getProvider(getMainAgentProvider())
   try {
+    // Discord plugin workaround — see src/web/agent-process.ts comment.
+    // Only Discord needs the bypass; telegram/slack work with --channels.
+    const channelsFlag = provider.type === 'discord'
+      ? '--dangerously-load-development-channels'
+      : '--channels'
     const claudeCmd = [
       'export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
       '&&', CLAUDE, '--continue', '--dangerously-skip-permissions',
-      `--channels plugin:${provider.pluginId}`,
+      `${channelsFlag} plugin:${provider.pluginId}`,
     ].join(' ')
     execFileSync(TMUX, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })
     logger.warn({ provider: provider.type }, 'Marveen session respawned with --continue')

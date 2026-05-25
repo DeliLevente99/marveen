@@ -30,8 +30,20 @@ SESSION="${MAIN_AGENT_ID:-marveen}-channels"
 
 # Resolve plugin ID from provider
 case "$CHANNEL_PROVIDER" in
-  slack)  PLUGIN_ID="slack@jeremylongshore/claude-code-slack-channel" ;;
-  *)      PLUGIN_ID="telegram@claude-plugins-official" ;;
+  slack)   PLUGIN_ID="slack@jeremylongshore/claude-code-slack-channel" ;;
+  discord) PLUGIN_ID="discord@claude-plugins-official" ;;
+  *)       PLUGIN_ID="telegram@claude-plugins-official" ;;
+esac
+
+# Discord plugin workaround (Claude Code bug #36431, #36975): the
+# standard --channels flag validates plugins against an "org approved
+# channels" list, and the official discord plugin is not on it. Messages
+# arrive at the plugin but Claude never receives them. The
+# --dangerously-load-development-channels flag bypasses the validation.
+# Scoped to discord only; telegram/slack work with plain --channels.
+case "$CHANNEL_PROVIDER" in
+  discord) CHANNELS_FLAG="--dangerously-load-development-channels" ;;
+  *)       CHANNELS_FLAG="--channels" ;;
 esac
 
 # Extra safety net for existing installs whose tmux server already has a
@@ -67,7 +79,7 @@ if [ -d "$CLAUDE_PROJECT_DIR" ] && ls "$CLAUDE_PROJECT_DIR"/*.jsonl >/dev/null 2
 fi
 
 $TMUX new-session -d -s "$SESSION" -c "$INSTALL_DIR" \
-  "$CLAUDE --dangerously-skip-permissions $CONTINUE_FLAG --channels plugin:${PLUGIN_ID}"
+  "$CLAUDE --dangerously-skip-permissions $CONTINUE_FLAG ${CHANNELS_FLAG} plugin:${PLUGIN_ID}"
 
 # Session startup guard: a Claude Code first-run dialogusait auto-accept-eljuk
 # kulonben a headless session orokre parkolna a prompton es a Telegram plugin

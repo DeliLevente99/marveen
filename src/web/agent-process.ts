@@ -112,7 +112,17 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
     // Slack plugin is third-party; its "not on approved allowlist" check is
     // bypassed via `allowedChannelPlugins` in /Library/Application Support/ClaudeCode/managed-settings.json.
     const auditLogEnv = agentProvider === 'slack' ? ` && export SLACK_AUDIT_LOG="${agentChannelDir}/audit.jsonl"` : ''
-    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && export ${stateEnvVar}="${agentChannelDir}"${auditLogEnv} && ${claudeConfigEnv}${ollamaEnv}${deepseekEnv}cd "${dir}" && ${CLAUDE} ${continueFlag}${skipFlag}--model ${model} --channels plugin:${provider.pluginId}`
+    // Discord plugin workaround: the standard --channels flag validates
+    // against an "org approved channels" list (Claude Code bug #36431,
+    // #36975), and the official Discord plugin is not on it — so messages
+    // arrive at the plugin but Claude never gets notified. The
+    // --dangerously-load-development-channels flag bypasses the
+    // validation. Scoped to discord only; telegram/slack are on the
+    // approved list and work with plain --channels.
+    const channelsFlag = agentProvider === 'discord'
+      ? '--dangerously-load-development-channels'
+      : '--channels'
+    const cmd = `export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH" && ${unsetTokens} && export ${stateEnvVar}="${agentChannelDir}"${auditLogEnv} && ${claudeConfigEnv}${ollamaEnv}${deepseekEnv}cd "${dir}" && ${CLAUDE} ${continueFlag}${skipFlag}--model ${model} ${channelsFlag} plugin:${provider.pluginId}`
     execSync(
       `${TMUX} new-session -d -s ${session} "${cmd}"`,
       { timeout: 10000 }
