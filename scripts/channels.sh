@@ -30,8 +30,9 @@ SESSION="${MAIN_AGENT_ID:-marveen}-channels"
 
 # Resolve plugin ID from provider
 case "$CHANNEL_PROVIDER" in
-  slack)  PLUGIN_ID="slack@jeremylongshore/claude-code-slack-channel" ;;
-  *)      PLUGIN_ID="telegram@claude-plugins-official" ;;
+  slack)    PLUGIN_ID="slack-channel@marveen-marketplace" ;;
+  discord)  PLUGIN_ID="discord@claude-plugins-official" ;;
+  *)        PLUGIN_ID="telegram@claude-plugins-official" ;;
 esac
 
 # Extra safety net for existing installs whose tmux server already has a
@@ -40,7 +41,8 @@ esac
 # ~/.claude/channels/<provider>/.env via the plugin's own bootstrap.
 command -v tmux >/dev/null 2>&1 && tmux set-environment -g -u TELEGRAM_BOT_TOKEN 2>/dev/null || true
 command -v tmux >/dev/null 2>&1 && tmux set-environment -g -u SLACK_BOT_TOKEN 2>/dev/null || true
-unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN
+command -v tmux >/dev/null 2>&1 && tmux set-environment -g -u DISCORD_BOT_TOKEN 2>/dev/null || true
+unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN DISCORD_BOT_TOKEN
 
 export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
 

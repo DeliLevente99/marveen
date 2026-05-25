@@ -1529,6 +1529,14 @@ function updateProviderUI() {
     if (slackGroup) slackGroup.hidden = true
     if (manifestBtnGroup) manifestBtnGroup.hidden = true
     if (smokeTestBtn) smokeTestBtn.hidden = true
+  } else if (currentChannelProvider === 'discord') {
+    if (title) title.textContent = 'Discord bot bekotese'
+    if (steps) steps.innerHTML = '<li>Menj a <strong>Discord Developer Portal</strong>-ra (discord.com/developers)</li><li>Hozz letre egy uj Application-t es Bot-ot</li><li>Masold be a Bot Token-t ide</li>'
+    if (label) label.textContent = 'Bot Token'
+    if (input) input.placeholder = 'MTIzNDU2Nzg5MDEyMzQ1Njc4OQ...'
+    if (slackGroup) slackGroup.hidden = true
+    if (manifestBtnGroup) manifestBtnGroup.hidden = true
+    if (smokeTestBtn) smokeTestBtn.hidden = true
   } else {
     if (title) title.textContent = 'Slack app bekötése'
     if (steps) steps.innerHTML = '<li>Hozz létre egy Slack App-ot, vagy használd a manifest gombot lent</li><li>Másold be a Bot Token-t (xoxb-...) és az App Token-t (xapp-...)</li>'

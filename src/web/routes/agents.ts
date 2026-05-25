@@ -35,6 +35,7 @@ import {
 } from '../agent-team.js'
 import {
   readAgentTelegramConfig,
+  readAgentDiscordConfig,
   readMarveenTelegramConfig,
   sendAvatarChangeMessage,
   sendWelcomeMessage,
@@ -78,7 +79,7 @@ import { parseMultipart } from '../multipart.js'
 import { readBody, json, serveFile } from '../http-helpers.js'
 import type { RouteContext } from './types.js'
 
-const VALID_PROVIDERS = new Set<ChannelProviderType>(['telegram', 'slack'])
+const VALID_PROVIDERS = new Set<ChannelProviderType>(['telegram', 'slack', 'discord'])
 
 function parseChannelProvider(raw: string): ChannelProviderType | null {
   if (VALID_PROVIDERS.has(raw as ChannelProviderType)) return raw as ChannelProviderType
@@ -88,7 +89,7 @@ function parseChannelProvider(raw: string): ChannelProviderType | null {
 // Match both new /channels/:provider/ and legacy /telegram/ URL patterns.
 // Returns [agentName, provider] or null. Legacy routes always resolve to 'telegram'.
 function matchChannelRoute(path: string, suffix: string): [string, ChannelProviderType] | null {
-  const newPattern = new RegExp(`^/api/agents/([^/]+)/channels/(telegram|slack)${suffix}$`)
+  const newPattern = new RegExp(`^/api/agents/([^/]+)/channels/(telegram|slack|discord)${suffix}$`)
   const newMatch = path.match(newPattern)
   if (newMatch) {
     const provider = parseChannelProvider(newMatch[2])
@@ -152,10 +153,15 @@ export function setAgentEnabledPlugins(name: string, provider: ChannelProviderTy
     try { existing = JSON.parse(readFileSync(settingsPath, 'utf-8')) } catch { /* overwrite */ }
   }
   const plugins = (existing.enabledPlugins ?? {}) as Record<string, boolean>
-  if (provider === 'slack') {
+  if (provider === 'discord') {
     plugins['telegram@claude-plugins-official'] = false
+    plugins['slack-channel@marveen-marketplace'] = false
+  } else if (provider === 'slack') {
+    plugins['telegram@claude-plugins-official'] = false
+    plugins['discord@claude-plugins-official'] = false
   } else {
     plugins['slack-channel@marveen-marketplace'] = false
+    plugins['discord@claude-plugins-official'] = false
   }
   existing.enabledPlugins = plugins
   atomicWriteFileSync(settingsPath, JSON.stringify(existing, null, 2))
@@ -187,6 +193,7 @@ interface AgentSummary {
   team: TeamConfig
   hasTelegram: boolean
   telegramBotUsername?: string
+  hasDiscord: boolean
   status: 'configured' | 'draft'
   running: boolean
   session?: string
@@ -207,6 +214,7 @@ function getAgentSummary(name: string): AgentSummary {
   const claudeMd = readFileOr(join(configRoot, 'CLAUDE.md'), '')
   const soulMd = readFileOr(join(dir, 'SOUL.md'), '')
   const tg = readAgentTelegramConfig(name)
+  const dc = readAgentDiscordConfig(name)
   const hasClaudeMd = claudeMd.trim().length > 0
   const hasSoulMd = soulMd.trim().length > 0
 
@@ -221,6 +229,7 @@ function getAgentSummary(name: string): AgentSummary {
     team: readAgentTeam(name),
     hasTelegram: tg.hasTelegram,
     telegramBotUsername: tg.botUsername,
+    hasDiscord: dc.hasDiscord,
     status: hasClaudeMd && hasSoulMd ? 'configured' : 'draft',
     running: proc.running,
     session: proc.session,
@@ -814,7 +823,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   }
 
   // DELETE /api/agents/:name/channels/:provider/invites/:token (legacy: /telegram/invites/:token)
-  const inviteRevokeNewMatch = path.match(/^\/api\/agents\/([^/]+)\/channels\/(telegram|slack)\/invites\/(.+)$/)
+  const inviteRevokeNewMatch = path.match(/^\/api\/agents\/([^/]+)\/channels\/(telegram|slack|discord)\/invites\/(.+)$/)
   const inviteRevokeLegacyMatch = path.match(/^\/api\/agents\/([^/]+)\/telegram\/invites\/(.+)$/)
   const inviteRevokeMatch = inviteRevokeNewMatch
     ? { name: decodeURIComponent(inviteRevokeNewMatch[1]), provider: inviteRevokeNewMatch[2] as ChannelProviderType, token: decodeURIComponent(inviteRevokeNewMatch[3]) }
@@ -835,7 +844,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   }
 
   // DELETE /api/agents/:name/channels/:provider/allowed/:type/:id (legacy: /telegram/allowed/:type/:id)
-  const allowedRemoveNewMatch = path.match(/^\/api\/agents\/([^/]+)\/channels\/(telegram|slack)\/allowed\/(user|group)\/(.+)$/)
+  const allowedRemoveNewMatch = path.match(/^\/api\/agents\/([^/]+)\/channels\/(telegram|slack|discord)\/allowed\/(user|group)\/(.+)$/)
   const allowedRemoveLegacyMatch = path.match(/^\/api\/agents\/([^/]+)\/telegram\/allowed\/(user|group)\/(.+)$/)
   const allowedRemoveMatch = allowedRemoveNewMatch
     ? { name: decodeURIComponent(allowedRemoveNewMatch[1]), provider: allowedRemoveNewMatch[2] as ChannelProviderType, kind: allowedRemoveNewMatch[3], id: decodeURIComponent(allowedRemoveNewMatch[4]) }

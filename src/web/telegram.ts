@@ -15,6 +15,15 @@ export function readAgentTelegramConfig(name: string): { hasTelegram: boolean; b
   return { hasTelegram: true }
 }
 
+export function readAgentDiscordConfig(name: string): { hasDiscord: boolean; botUsername?: string } {
+  const envPath = join(agentDir(name), '.claude', 'channels', 'discord', '.env')
+  if (!existsSync(envPath)) return { hasDiscord: false }
+  const content = readFileOr(envPath, '')
+  const tokenMatch = content.match(/DISCORD_BOT_TOKEN=(.+)/)
+  if (!tokenMatch || !tokenMatch[1].trim()) return { hasDiscord: false }
+  return { hasDiscord: true }
+}
+
 // Marveen's Telegram channel lives under the global ~/.claude path, not
 // under agents/marveen, because the main agent reuses the system Claude
 // Code channel install. Read it the same way the plugin does.

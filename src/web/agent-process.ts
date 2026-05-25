@@ -20,7 +20,7 @@ import { agentRuntime } from '../platform/agent-runtime.js'
 
 function resolveAgentProvider(name: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(name)
-  if (perAgent === 'slack' || perAgent === 'telegram') return perAgent
+  if (perAgent === 'slack' || perAgent === 'telegram' || perAgent === 'discord') return perAgent
   return CHANNEL_PROVIDER
 }
 
@@ -73,7 +73,12 @@ function buildAgentEnv(opts: {
   delete env.TELEGRAM_BOT_TOKEN
   delete env.SLACK_BOT_TOKEN
   delete env.SLACK_APP_TOKEN
-  const stateEnvVar = opts.agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+  delete env.DISCORD_BOT_TOKEN
+  const stateEnvVar = opts.agentProvider === 'slack'
+    ? 'SLACK_STATE_DIR'
+    : opts.agentProvider === 'discord'
+      ? 'DISCORD_STATE_DIR'
+      : 'TELEGRAM_STATE_DIR'
   env[stateEnvVar] = opts.agentChannelDir
   if (opts.agentProvider === 'slack') {
     env.SLACK_AUDIT_LOG = join(opts.agentChannelDir, 'audit.jsonl')
@@ -183,7 +188,7 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
       // these before our exports run, so a sub-agent never inherits the
       // main agent's channel token. See scripts/channels.sh:18-23 for
       // the leak path this defends against.
-      unsetEnv: ['TELEGRAM_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN'],
+      unsetEnv: ['TELEGRAM_BOT_TOKEN', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN', 'DISCORD_BOT_TOKEN'],
     })
 
     logger.info({ name, session, channelDir: agentChannelDir }, 'Agent session started')
@@ -240,7 +245,11 @@ export function stopAgentProcess(name: string): { ok: boolean; error?: string } 
         }
       }
       if (process.platform !== 'win32') {
-        const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+        const stateEnvVar = agentProvider === 'slack'
+          ? 'SLACK_STATE_DIR'
+          : agentProvider === 'discord'
+            ? 'DISCORD_STATE_DIR'
+            : 'TELEGRAM_STATE_DIR'
         execFileSync('/usr/bin/pkill', ['-f', `${stateEnvVar}=${chanDir}`], { timeout: 3000 })
       }
       // Windows orphan reap (Get-CimInstance Win32_Process + Stop-Process)
