@@ -124,6 +124,42 @@ function buildWinProcessLockContext(): ProcessLockContext {
     logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Could not read own SessionId; legitimacy check on Windows will be more permissive')
   }
 
+  // Walk the launch chain (cmd.exe / npm / tsx CLI / etc.) so we never
+  // SIGTERM a parent that has `src/index.ts` in its argv just because
+  // it spawned us. On POSIX the parent is usually a shell whose argv
+  // doesn't trip the dashboard binary pattern, so this is a Windows-
+  // only hazard: `npm run dev` invokes `cmd /c "tsx src/index.ts"`
+  // and `node tsx/cli.mjs src/index.ts` spawns a fresh node child --
+  // both wrappers have the script path in their argv and were getting
+  // SIGTERMed by acquirePortLock, killing the dashboard itself as
+  // an orphaned grandchild. Computed once at construction; the chain
+  // doesn't grow at runtime.
+  const ancestorPids = new Set<number>()
+  try {
+    const sessionFilter = ownSessionId != null ? ` -Filter "SessionId=${ownSessionId}"` : ''
+    const raw = runPs(
+      `Get-CimInstance Win32_Process${sessionFilter} | Select-Object ProcessId,ParentProcessId | ConvertTo-Csv -NoTypeInformation`,
+      5000,
+    )
+    const ppidMap = new Map<number, number>()
+    const lines = raw.split(/\r?\n/)
+    for (let i = 1; i < lines.length; i++) {
+      const m = lines[i].match(/^"(\d+)","(\d+)"$/)
+      if (!m) continue
+      const pid = parseInt(m[1], 10)
+      const ppid = parseInt(m[2], 10)
+      if (Number.isFinite(pid) && Number.isFinite(ppid)) ppidMap.set(pid, ppid)
+    }
+    let cur: number | undefined = ppidMap.get(process.pid)
+    let steps = 0
+    while (cur != null && cur > 0 && steps++ < 64 && !ancestorPids.has(cur)) {
+      ancestorPids.add(cur)
+      cur = ppidMap.get(cur)
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Could not enumerate ancestor PIDs; acquirePortLock may SIGTERM the launcher chain on Windows')
+  }
+
   // PowerShell spawns cost ~150-300 ms each. process-lock.ts's
   // filterOwnNodeCandidates calls getProcessCommand once per
   // enumerated PID, which on a Windows session with ~50 processes
@@ -199,6 +235,7 @@ function buildWinProcessLockContext(): ProcessLockContext {
           const cmd = commandFromArgv(cmdline)
           if (cmd) cmdCache.set(pid, cmd)
           if (pid === process.pid) continue
+          if (ancestorPids.has(pid)) continue
           if (!pattern.test(cmdline)) continue
           out.push(pid)
         }
