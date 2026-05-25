@@ -16,6 +16,18 @@
 //
 // The invite-token is a "shared secret" that grants exactly one auto-approve.
 // Tokens are 16 random bytes (base64url, ~22 chars), unguessable in practice.
+//
+// First-pair TOFU (trust-on-first-use):
+// As a fallback when no live invites exist and allowFrom is still empty
+// (truly fresh install — operator never paired anyone), the monitor
+// approves the first pending entry it sees, provided dmPolicy is
+// 'pairing' and exactly one pending entry exists. This makes the
+// Windows install usable without the install.sh-issued invite that the
+// POSIX path relies on. Trust model: whoever DMs the freshly-installed
+// bot first is the operator. The risk window is "between bot install
+// and operator's first DM"; the bot token file is owner-only ACL'd at
+// install time so an attacker cannot easily acquire it. Once allowFrom
+// is populated the TOFU branch is dead permanently for that bot.
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -161,49 +173,80 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
 
     for (const { name, accessPath } of targets) {
       const access = readAccess(accessPath)
-      if (!access.invites || !access.pending) continue
+      if (!access.pending || Object.keys(access.pending).length === 0) continue
 
       const now = Date.now()
       const expiredOrUsed = pruneInvites(access, now)
 
-      const live = Object.entries(access.invites)
-        .filter(([, inv]) => !inv.used && inv.expiresAt >= now)
-        .sort((a, b) => a[1].createdAt - b[1].createdAt)
-      if (live.length === 0) {
-        if (expiredOrUsed && activeInviteCount(access, now) === 0 && access.dmPolicy === 'pairing') {
-          access.dmPolicy = 'allowlist'
-          writeAccess(accessPath, access)
-        }
-        continue
-      }
+      const live = access.invites
+        ? Object.entries(access.invites)
+            .filter(([, inv]) => !inv.used && inv.expiresAt >= now)
+            .sort((a, b) => a[1].createdAt - b[1].createdAt)
+        : []
 
       const pendingEntries = Object.entries(access.pending)
         .sort((a, b) => a[1].createdAt - b[1].createdAt)
-      if (pendingEntries.length === 0) continue
 
-      const [pCode, pEntry] = pendingEntries[0]
-      const [tToken, tEntry] = live[0]
+      if (live.length > 0) {
+        // Invite-based path: at least one live invite means the operator
+        // is intentionally accepting a paired peer. Approve the oldest
+        // pending entry against the oldest live invite.
+        const [pCode, pEntry] = pendingEntries[0]
+        const [tToken, tEntry] = live[0]
 
-      if (!access.allowFrom) access.allowFrom = []
-      if (!access.allowFrom.includes(pEntry.senderId)) access.allowFrom.push(pEntry.senderId)
-      delete access.pending[pCode]
+        if (!access.allowFrom) access.allowFrom = []
+        if (!access.allowFrom.includes(pEntry.senderId)) access.allowFrom.push(pEntry.senderId)
+        delete access.pending[pCode]
 
-      tEntry.used = true
-      tEntry.usedBy = pEntry.senderId
-      tEntry.usedAt = now
+        tEntry.used = true
+        tEntry.usedBy = pEntry.senderId
+        tEntry.usedAt = now
 
-      if (activeInviteCount(access, now) === 0) access.dmPolicy = 'allowlist'
+        if (activeInviteCount(access, now) === 0) access.dmPolicy = 'allowlist'
 
-      try {
-        const approvedDir = join(accessPath, '..', 'approved')
-        mkdirSync(approvedDir, { recursive: true })
-        writeFileSync(join(approvedDir, pEntry.senderId), '')
-      } catch (err) {
-        logger.warn({ err, name, senderId: pEntry.senderId }, 'invite-monitor: failed to write approved marker')
+        try {
+          const approvedDir = join(accessPath, '..', 'approved')
+          mkdirSync(approvedDir, { recursive: true })
+          writeFileSync(join(approvedDir, pEntry.senderId), '')
+        } catch (err) {
+          logger.warn({ err, name, senderId: pEntry.senderId }, 'invite-monitor: failed to write approved marker')
+        }
+
+        writeAccess(accessPath, access)
+        logger.info({ name, provider, senderId: pEntry.senderId, token: tToken }, 'Channel invite auto-approved')
+        continue
       }
 
-      writeAccess(accessPath, access)
-      logger.info({ name, provider, senderId: pEntry.senderId, token: tToken }, 'Channel invite auto-approved')
+      // No live invites. Fall through to TOFU first-pair: allow only
+      // when truly fresh (allowFrom empty, dmPolicy=pairing, exactly
+      // one pending). Restoring allowlist policy as the very first step
+      // would prematurely kill TOFU on a fresh install whose pruned
+      // invites had expired -- defer until we've decided.
+      const allowEmpty = (access.allowFrom?.length ?? 0) === 0
+      const tofuEligible = allowEmpty && access.dmPolicy === 'pairing' && pendingEntries.length === 1
+      if (tofuEligible) {
+        const [pCode, pEntry] = pendingEntries[0]
+        access.allowFrom = [pEntry.senderId]
+        delete access.pending[pCode]
+        try {
+          const approvedDir = join(accessPath, '..', 'approved')
+          mkdirSync(approvedDir, { recursive: true })
+          writeFileSync(join(approvedDir, pEntry.senderId), '')
+        } catch (err) {
+          logger.warn({ err, name, senderId: pEntry.senderId }, 'invite-monitor: failed to write TOFU approved marker')
+        }
+        writeAccess(accessPath, access)
+        logger.info({ name, provider, senderId: pEntry.senderId }, 'Channel first-pair auto-approved (TOFU): no live invites, allowlist was empty')
+        continue
+      }
+
+      // Not TOFU-eligible (allowFrom already populated, or multiple
+      // pending, or dmPolicy not "pairing") and no live invites.
+      // Restore allowlist policy if we just pruned the last invite.
+      if (expiredOrUsed && activeInviteCount(access, now) === 0 && access.dmPolicy === 'pairing') {
+        access.dmPolicy = 'allowlist'
+        writeAccess(accessPath, access)
+      }
     }
   }
 }
