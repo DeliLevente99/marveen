@@ -26,7 +26,7 @@ import { PROJECT_ROOT, MAIN_AGENT_ID, CHANNEL_PROVIDER, OLLAMA_URL } from '../co
 import { logger } from '../logger.js'
 import { resolveFromPath } from '../platform.js'
 import { getProvider, channelStateDir } from '../channel-provider.js'
-import { agentRuntime } from '../platform/agent-runtime.js'
+import { agentRuntime, type SessionName } from '../platform/agent-runtime.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
 
 function buildMainChannelsEnv(): Record<string, string> {
@@ -58,6 +58,77 @@ function hasPriorClaudeSession(): boolean {
   const projectsRoot = join(homedir(), '.claude', 'projects')
   const encodedProject = PROJECT_ROOT.replace(/[\\/]/g, '-')
   return existsSync(join(projectsRoot, encodedProject))
+}
+
+// Collapse ANSI residue + all whitespace so dialog detection survives the
+// cursor-positioning sequences ConPTY emits between every word. Without
+// collapsing whitespace, "Yes, I trust" arrives as "Yes,[1C]I[1C]trust" and
+// the literal-phrase patterns scripts/channels.sh uses on POSIX would never
+// match.
+function flattenPane(pane: string): string {
+  return pane
+    .replace(/\x1b\[[0-9;?<>]*[a-zA-Z]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*[\x07\x1b]/g, '')
+    .replace(/\s+/g, '')
+}
+
+// Auto-accept the trust + bypass-permissions dialogs Claude Code's TUI shows
+// on first launch in a folder. The POSIX equivalent is the 12-iteration loop
+// at scripts/channels.sh:80-110 (`tmux capture-pane` + `send-keys`). Without
+// this, the channels session sits at the trust prompt indefinitely and the
+// plugin never loads, so every channel message silently no-ops -- which is
+// exactly what the L2 smoke test surfaced.
+//
+// Async + fire-and-forget so dashboard boot is not blocked by the handshake
+// window. Errors are logged but never thrown -- a failure to auto-accept
+// degrades to "operator must dismiss manually", same as if this code did
+// not exist.
+function autoAcceptStartupDialogs(session: SessionName): void {
+  const MAX_ATTEMPTS = 15 // ~15s wallclock; ConPTY-on-WSL paint can be slow
+  let trustHandled = false
+  let bypassHandled = false
+  let attempt = 0
+  const tick = (): void => {
+    attempt++
+    if (!agentRuntime.hasSession(session)) {
+      logger.warn({ session, attempt }, 'Channels session died before startup dialogs were dismissed')
+      return
+    }
+    if (attempt > MAX_ATTEMPTS) {
+      logger.warn({ session, trustHandled, bypassHandled }, 'Channels session startup-dialog timeout (plugin may not have loaded)')
+      return
+    }
+    const pane = agentRuntime.capture(session)
+    const flat = pane != null ? flattenPane(pane) : ''
+    if (/Listeningforchannel/i.test(flat)) {
+      logger.info({ session, attempt }, 'Channels session plugin loaded')
+      return
+    }
+    if (!trustHandled && /Doyoutrust|Isthisaproject|Itrust|trustthisfolder/i.test(flat)) {
+      trustHandled = true
+      logger.info({ session }, 'Channels session: trust dialog detected, auto-accepting (1+Enter)')
+      try {
+        agentRuntime.sendKey(session, '1')
+        agentRuntime.sleepSync(100)
+        agentRuntime.sendKey(session, 'Enter')
+      } catch (err) {
+        logger.warn({ err, session }, 'Failed to send keys for trust auto-accept')
+      }
+    } else if (!bypassHandled && trustHandled && /BypassPermissions|Iaccept/i.test(flat)) {
+      bypassHandled = true
+      logger.info({ session }, 'Channels session: bypass-permissions dialog detected, auto-accepting (2+Enter)')
+      try {
+        agentRuntime.sendKey(session, '2')
+        agentRuntime.sleepSync(100)
+        agentRuntime.sendKey(session, 'Enter')
+      } catch (err) {
+        logger.warn({ err, session }, 'Failed to send keys for bypass auto-accept')
+      }
+    }
+    setTimeout(tick, 1000)
+  }
+  // First tick after a beat so ConPTY has painted the initial frame.
+  setTimeout(tick, 1500)
 }
 
 /**
@@ -101,6 +172,7 @@ export function startMainChannelsSession(): void {
       { session: MAIN_CHANNELS_SESSION, plugin: provider.pluginId, agentId: MAIN_AGENT_ID },
       'Main channels session spawned (Windows)',
     )
+    autoAcceptStartupDialogs(MAIN_CHANNELS_SESSION)
   } catch (err) {
     logger.error({ err }, 'Failed to spawn main channels session on Windows; channel plugin will not be available')
   }
