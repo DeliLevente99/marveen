@@ -1,7 +1,7 @@
 import { existsSync, unlinkSync, copyFileSync, writeFileSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { PROJECT_ROOT, OWNER_NAME, BOT_NAME } from '../../config.js'
-import { readMarveenTelegramConfig, sendMarveenAvatarChange } from '../telegram.js'
+import { readMarveenTelegramConfig, readMarveenDiscordConfig, sendMarveenAvatarChange } from '../telegram.js'
 import { hardRestartMarveenChannels } from '../channel-monitor.js'
 import { readFileOr } from '../agent-config.js'
 import { parseMultipart } from '../multipart.js'
@@ -22,6 +22,7 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     const descFromPersonality = soulSection.split('\n').filter(l => l.trim()).slice(0, 2).join(' ').slice(0, 200)
     const description = firstLine || descFromPersonality || `${OWNER_NAME} AI asszisztense`
     const tg = readMarveenTelegramConfig()
+    const dc = readMarveenDiscordConfig()
     json(res, {
       name: BOT_NAME,
       description,
@@ -29,6 +30,7 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       running: true,
       hasTelegram: tg.hasTelegram,
       telegramBotUsername: tg.botUsername,
+      hasDiscord: dc.hasDiscord,
       role: 'main',
       personality: soulSection,
       claudeMd,

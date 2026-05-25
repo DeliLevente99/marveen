@@ -28,6 +28,29 @@ export function readMarveenTelegramConfig(): { hasTelegram: boolean; botUsername
   return { hasTelegram: true, botUsername: marveenBotUsernameCache.value }
 }
 
+// Discord parallels (added alongside the telegram-specific readers; no
+// rename of the existing telegram code per the operator's option-2
+// preference: minimum invasive). For multi-provider unification later,
+// these and the telegram versions would converge into a single helper.
+
+export function readAgentDiscordConfig(name: string): { hasDiscord: boolean } {
+  const envPath = join(agentDir(name), '.claude', 'channels', 'discord', '.env')
+  if (!existsSync(envPath)) return { hasDiscord: false }
+  const content = readFileOr(envPath, '')
+  const tokenMatch = content.match(/DISCORD_BOT_TOKEN=(.+)/)
+  if (!tokenMatch || !tokenMatch[1].trim()) return { hasDiscord: false }
+  return { hasDiscord: true }
+}
+
+export function readMarveenDiscordConfig(): { hasDiscord: boolean } {
+  const envPath = join(homedir(), '.claude', 'channels', 'discord', '.env')
+  if (!existsSync(envPath)) return { hasDiscord: false }
+  const content = readFileOr(envPath, '')
+  const tokenMatch = content.match(/DISCORD_BOT_TOKEN=(.+)/)
+  if (!tokenMatch || !tokenMatch[1].trim()) return { hasDiscord: false }
+  return { hasDiscord: true }
+}
+
 // Bot username changes require a restart anyway, so a long cache is fine.
 export const marveenBotUsernameCache: { value?: string; fetchedAt: number } = { fetchedAt: 0 }
 

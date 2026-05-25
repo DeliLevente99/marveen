@@ -1511,7 +1511,6 @@ document.getElementById('saveMcpJsonBtn').addEventListener('click', async () => 
 
 // === Channel tab ===
 function updateProviderUI() {
-  const isTg = currentChannelProvider === 'telegram'
   const title = document.getElementById('chSetupTitle')
   const steps = document.getElementById('chSetupSteps')
   const label = document.getElementById('chTokenLabel')
@@ -1521,7 +1520,7 @@ function updateProviderUI() {
   const smokeTestBtn = document.getElementById('chSmokeTestBtn')
   const reconnectBtn = document.getElementById('chReconnectBtn')
 
-  if (isTg) {
+  if (currentChannelProvider === 'telegram') {
     if (title) title.textContent = 'Telegram bot bekotese'
     if (steps) steps.innerHTML = '<li>Nyisd meg a <strong>@BotFather</strong>-t a Telegramban</li><li>Hozz letre egy uj botot a <code>/newbot</code> paranccsal</li><li>Masold be az API tokent ide</li>'
     if (label) label.textContent = 'Bot API Token'
@@ -1529,7 +1528,16 @@ function updateProviderUI() {
     if (slackGroup) slackGroup.hidden = true
     if (manifestBtnGroup) manifestBtnGroup.hidden = true
     if (smokeTestBtn) smokeTestBtn.hidden = true
+  } else if (currentChannelProvider === 'discord') {
+    if (title) title.textContent = 'Discord bot bekötése'
+    if (steps) steps.innerHTML = '<li>Nyisd meg a <a href="https://discord.com/developers/applications" target="_blank">discord.com/developers/applications</a> oldalt</li><li>New Application → Bot tab → Reset Token, másold ki</li><li>OAuth2 → URL Generator → bot scope + Send Messages permission → invite link → szerverre meghívás</li><li>Másold be a tokent ide</li>'
+    if (label) label.textContent = 'Discord Bot Token'
+    if (input) input.placeholder = 'MTIz.abc.xyz...'
+    if (slackGroup) slackGroup.hidden = true
+    if (manifestBtnGroup) manifestBtnGroup.hidden = true
+    if (smokeTestBtn) smokeTestBtn.hidden = true
   } else {
+    // slack
     if (title) title.textContent = 'Slack app bekötése'
     if (steps) steps.innerHTML = '<li>Hozz létre egy Slack App-ot, vagy használd a manifest gombot lent</li><li>Másold be a Bot Token-t (xoxb-...) és az App Token-t (xapp-...)</li>'
     if (label) label.textContent = 'Bot Token (xoxb-...)'
@@ -1539,12 +1547,23 @@ function updateProviderUI() {
     if (smokeTestBtn) smokeTestBtn.hidden = false
   }
   if (reconnectBtn) {
-    reconnectBtn.hidden = !(currentAgent && currentAgent.running && currentAgent.hasTelegram)
+    // Provider-aware "channel wired up" check: each provider has its
+    // own boolean field in the agent payload. Add new providers here
+    // alongside the option-2 parallel-field convention.
+    const connected = currentChannelProvider === 'discord'
+      ? !!(currentAgent && currentAgent.hasDiscord)
+      : !!(currentAgent && currentAgent.hasTelegram) // slack also uses hasTelegram today (legacy field name); discord branches off
+    reconnectBtn.hidden = !(currentAgent && currentAgent.running && connected)
   }
 }
 
 function updateChannelTab(agent) {
-  const connected = agent.hasTelegram || false
+  // Provider-aware connect check: parallels updateProviderUI's gate.
+  // Telegram + Slack reuse the legacy hasTelegram field; Discord
+  // has its own hasDiscord parallel field (option-2 layout).
+  const connected = currentChannelProvider === 'discord'
+    ? (agent.hasDiscord || false)
+    : (agent.hasTelegram || false)
   const running = agent.running || false
   document.getElementById('chNotConnected').hidden = connected
   document.getElementById('chConnected').hidden = !connected

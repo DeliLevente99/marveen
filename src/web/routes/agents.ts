@@ -36,6 +36,7 @@ import {
 import {
   readAgentTelegramConfig,
   readMarveenTelegramConfig,
+  readAgentDiscordConfig,
   sendAvatarChangeMessage,
   sendWelcomeMessage,
   validateTelegramToken,
@@ -187,6 +188,7 @@ interface AgentSummary {
   team: TeamConfig
   hasTelegram: boolean
   telegramBotUsername?: string
+  hasDiscord: boolean
   status: 'configured' | 'draft'
   running: boolean
   session?: string
@@ -207,6 +209,7 @@ function getAgentSummary(name: string): AgentSummary {
   const claudeMd = readFileOr(join(configRoot, 'CLAUDE.md'), '')
   const soulMd = readFileOr(join(dir, 'SOUL.md'), '')
   const tg = readAgentTelegramConfig(name)
+  const dc = readAgentDiscordConfig(name)
   const hasClaudeMd = claudeMd.trim().length > 0
   const hasSoulMd = soulMd.trim().length > 0
 
@@ -221,6 +224,7 @@ function getAgentSummary(name: string): AgentSummary {
     team: readAgentTeam(name),
     hasTelegram: tg.hasTelegram,
     telegramBotUsername: tg.botUsername,
+    hasDiscord: dc.hasDiscord,
     status: hasClaudeMd && hasSoulMd ? 'configured' : 'draft',
     running: proc.running,
     session: proc.session,
