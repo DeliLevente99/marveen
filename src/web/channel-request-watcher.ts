@@ -8,7 +8,7 @@ import { upsertChannelRequest, listPendingChannelRequests, updateChannelRequestN
 
 function resolveAgentProvider(name: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(name)
-  if (perAgent === 'slack' || perAgent === 'telegram') return perAgent
+  if (perAgent === 'slack' || perAgent === 'telegram' || perAgent === 'discord') return perAgent
   return CHANNEL_PROVIDER
 }
 

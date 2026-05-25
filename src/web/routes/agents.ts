@@ -502,7 +502,10 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
 
     const stateDir = channelStateDir(provider, agentDir(name))
     mkdirSync(stateDir, { recursive: true })
-    const tokenKey = provider === 'slack' ? 'SLACK_BOT_TOKEN' : 'TELEGRAM_BOT_TOKEN'
+    const tokenKey =
+      provider === 'slack' ? 'SLACK_BOT_TOKEN' :
+      provider === 'discord' ? 'DISCORD_BOT_TOKEN' :
+      'TELEGRAM_BOT_TOKEN'
     let envContent = `${tokenKey}=${botToken.trim()}\n`
     if (provider === 'slack' && appToken?.trim()) {
       envContent += `SLACK_APP_TOKEN=${appToken.trim()}\n`

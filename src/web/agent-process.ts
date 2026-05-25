@@ -23,7 +23,7 @@ const CLAUDE = resolveFromPath('claude')
 
 function resolveAgentProvider(name: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(name)
-  if (perAgent === 'slack' || perAgent === 'telegram') return perAgent
+  if (perAgent === 'slack' || perAgent === 'telegram' || perAgent === 'discord') return perAgent
   return CHANNEL_PROVIDER
 }
 
@@ -104,7 +104,10 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
     const encodedProject = dir.replace(/\//g, '-')
     const hasPriorSession = existsSync(join(projectsRoot, encodedProject))
     const continueFlag = hasPriorSession ? '--continue ' : ''
-    const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+    const stateEnvVar =
+      agentProvider === 'slack' ? 'SLACK_STATE_DIR' :
+      agentProvider === 'discord' ? 'DISCORD_STATE_DIR' :
+      'TELEGRAM_STATE_DIR'
     const unsetTokens = 'unset TELEGRAM_BOT_TOKEN SLACK_BOT_TOKEN SLACK_APP_TOKEN'
     // Slack plugin is third-party; its "not on approved allowlist" check is
     // bypassed via `allowedChannelPlugins` in /Library/Application Support/ClaudeCode/managed-settings.json.
@@ -168,7 +171,10 @@ export function stopAgentProcess(name: string): { ok: boolean; error?: string } 
           try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
         }
       }
-      const stateEnvVar = agentProvider === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+      const stateEnvVar =
+      agentProvider === 'slack' ? 'SLACK_STATE_DIR' :
+      agentProvider === 'discord' ? 'DISCORD_STATE_DIR' :
+      'TELEGRAM_STATE_DIR'
       execFileSync('/usr/bin/pkill', ['-f', `${stateEnvVar}=${chanDir}`], { timeout: 3000 })
     } catch { /* pkill returns non-zero if no match -- fine */ }
     logger.info({ name, session }, 'Agent tmux session stopped')

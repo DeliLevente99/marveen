@@ -22,7 +22,7 @@ export function resolveAgentSession(agentName: string): string {
 
 export function resolveAgentProviderType(agentName: string): ChannelProviderType {
   const perAgent = readAgentChannelProvider(agentName)
-  if (perAgent === 'slack' || perAgent === 'telegram') return perAgent
+  if (perAgent === 'slack' || perAgent === 'telegram' || perAgent === 'discord') return perAgent
   return CHANNEL_PROVIDER
 }
 

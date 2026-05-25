@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { logger } from './logger.js'
 import { formatForTelegram, splitMessage } from './format.js'
 
-export type ChannelProviderType = 'telegram' | 'slack'
+export type ChannelProviderType = 'telegram' | 'slack' | 'discord'
 
 export interface ChannelProvider {
   readonly type: ChannelProviderType
@@ -223,6 +223,118 @@ const slackProvider: ChannelProvider = {
   splitMessage: (text) => splitMessage(text, SLACK_MAX_MESSAGE_LENGTH),
 }
 
+// -- Discord implementation --
+//
+// Discord API v10 (https://discord.com/developers/docs). Bot auth via
+// `Authorization: Bot <token>`. Channel ID is a snowflake (numeric
+// string). The plugin server (discord@claude-plugins-official, see
+// ~/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/)
+// reads its own token from ~/.claude/channels/discord/.env and handles
+// inbound messages + permission flows via discord.js + the MCP
+// transport. This provider only owns the dashboard-side notification
+// path (heartbeats, alerts, /api/notify) — i.e. direct API calls that
+// happen outside the plugin's session.
+
+const DISCORD_API = 'https://discord.com/api/v10'
+const DISCORD_MAX_MESSAGE_LENGTH = 2000
+
+export function formatForDiscord(text: string): string {
+  // Discord supports a GitHub-flavored Markdown subset directly: **bold**,
+  // *italic* / _italic_, __underline__, ~~strike~~, `code`, ```fenced```,
+  // # ## ### headers, > blockquote, - / * lists. Pass through. The two
+  // markers that don't render natively are GFM task-list checkboxes, so
+  // we convert those to unicode glyphs for readability. The Markdown link
+  // form `[text](url)` is NOT rendered in regular messages (only in
+  // embeds) — leaving it as-is is acceptable since the URL is at least
+  // visible plaintext, and rewriting to `text (url)` would mangle code-
+  // block contents.
+  let result = text
+  result = result.replace(/^- \[ \]/gm, '☐')
+  result = result.replace(/^- \[x\]/gm, '☑')
+  return result.trim()
+}
+
+const discordProvider: ChannelProvider = {
+  type: 'discord',
+  pluginId: 'discord@claude-plugins-official',
+  envKeys: ['DISCORD_BOT_TOKEN'],
+  stateDir: 'discord',
+  chatIdFormat: 'Discord channel ID (snowflake, e.g. 1268077055123456789)',
+
+  async sendMessage(token, chatId, text) {
+    const resp = await fetch(`${DISCORD_API}/channels/${chatId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bot ${token}`,
+      },
+      body: JSON.stringify({ content: text }),
+    })
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      throw new Error(`Discord API ${resp.status}: ${errText.slice(0, 200)}`)
+    }
+  },
+
+  async sendPhoto(token, chatId, photoPath, caption) {
+    // Discord file upload is a multipart POST to the same /messages
+    // endpoint with a payload_json part + a files[N] part. The
+    // `attachments` array in payload_json must reference each file by
+    // its index id to wire the inline rendering.
+    const fileData = readFileSync(photoPath)
+    const filename = photoPath.split('/').pop() || 'image.png'
+    const boundary = '----FormBoundary' + Date.now()
+    const payload = JSON.stringify({
+      content: caption || '',
+      attachments: [{ id: 0, filename }],
+    })
+    const parts: Buffer[] = []
+    parts.push(Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="payload_json"\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${payload}\r\n`,
+    ))
+    parts.push(Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="files[0]"; filename="${filename}"\r\n` +
+      `Content-Type: image/png\r\n\r\n`,
+    ))
+    parts.push(fileData)
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`))
+    const resp = await fetch(`${DISCORD_API}/channels/${chatId}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Authorization': `Bot ${token}`,
+      },
+      body: Buffer.concat(parts),
+    })
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      throw new Error(`Discord sendPhoto ${resp.status}: ${errText.slice(0, 200)}`)
+    }
+  },
+
+  async validateToken(token) {
+    try {
+      const resp = await fetch(`${DISCORD_API}/users/@me`, {
+        headers: { 'Authorization': `Bot ${token}` },
+      })
+      if (resp.ok) {
+        const data = await resp.json() as { username?: string; id?: string }
+        return { ok: true, botName: data.username || data.id }
+      }
+      return { ok: false, error: `Discord API ${resp.status}` }
+    } catch {
+      return { ok: false, error: 'Failed to connect to Discord API' }
+    }
+  },
+
+  formatMessage: formatForDiscord,
+  splitMessage: (text) => splitMessage(text, DISCORD_MAX_MESSAGE_LENGTH),
+}
+
 // -- Slack App manifest --
 
 const SLACK_BOT_SCOPES = [
@@ -291,11 +403,13 @@ export function getSlackAppSetupInstructions(): string[] {
 
 export function getChannelToken(provider: ChannelProviderType, env: Record<string, string>): string {
   if (provider === 'slack') return env['SLACK_BOT_TOKEN'] ?? ''
+  if (provider === 'discord') return env['DISCORD_BOT_TOKEN'] ?? ''
   return env['TELEGRAM_BOT_TOKEN'] ?? ''
 }
 
 export function getChannelChatId(provider: ChannelProviderType, env: Record<string, string>): string {
   if (provider === 'slack') return env['SLACK_CHANNEL_ID'] ?? ''
+  if (provider === 'discord') return env['DISCORD_CHANNEL_ID'] ?? ''
   return env['ALLOWED_CHAT_ID'] ?? ''
 }
 
@@ -304,6 +418,7 @@ export function getChannelChatId(provider: ChannelProviderType, env: Record<stri
 const providers: Record<ChannelProviderType, ChannelProvider> = {
   telegram: telegramProvider,
   slack: slackProvider,
+  discord: discordProvider,
 }
 
 export function getProvider(type: ChannelProviderType): ChannelProvider {
@@ -312,6 +427,7 @@ export function getProvider(type: ChannelProviderType): ChannelProvider {
 
 export function getProviderType(envValue: string | undefined): ChannelProviderType {
   if (envValue === 'slack') return 'slack'
+  if (envValue === 'discord') return 'discord'
   return 'telegram'
 }
 
@@ -319,7 +435,9 @@ export function channelStateDir(provider: ChannelProviderType, agentDir?: string
   const base = agentDir
     ? join(agentDir, '.claude', 'channels')
     : join(homedir(), '.claude', 'channels')
-  return join(base, provider === 'slack' ? 'slack' : 'telegram')
+  // stateDir matches the plugin's own state dir convention:
+  //   ~/.claude/channels/telegram, .../slack, .../discord
+  return join(base, provider)
 }
 
 export function readChannelToken(provider: ChannelProviderType, envFilePath: string): string | null {
@@ -330,7 +448,10 @@ export function readChannelToken(provider: ChannelProviderType, envFilePath: str
   } catch {
     return null
   }
-  const key = provider === 'slack' ? 'SLACK_BOT_TOKEN' : 'TELEGRAM_BOT_TOKEN'
+  const key =
+    provider === 'slack' ? 'SLACK_BOT_TOKEN' :
+    provider === 'discord' ? 'DISCORD_BOT_TOKEN' :
+    'TELEGRAM_BOT_TOKEN'
   const match = content.match(new RegExp(`${key}=(.+)`))
   return match ? match[1].trim() : null
 }
