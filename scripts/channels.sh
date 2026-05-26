@@ -35,6 +35,12 @@ case "$CHANNEL_PROVIDER" in
   *)        PLUGIN_ID="telegram@claude-plugins-official" ;;
 esac
 
+# Discord plugin is not on Claude's org-approved list; bypass the check.
+# Flag REQUIRES a tagged entry (plugin:<id> or server:<id>) -- without one
+# claude exits 1 with "entries must be tagged".
+DEVCHANNELS_FLAG=""
+[ "$CHANNEL_PROVIDER" = "discord" ] && DEVCHANNELS_FLAG="--dangerously-load-development-channels plugin:${PLUGIN_ID}"
+
 # Extra safety net for existing installs whose tmux server already has a
 # polluted global env -- scrub channel tokens so new child sessions don't
 # inherit them. The main agent's plugin will still load its token from
@@ -69,7 +75,7 @@ if [ -d "$CLAUDE_PROJECT_DIR" ] && ls "$CLAUDE_PROJECT_DIR"/*.jsonl >/dev/null 2
 fi
 
 $TMUX new-session -d -s "$SESSION" -c "$INSTALL_DIR" \
-  "$CLAUDE --dangerously-skip-permissions $CONTINUE_FLAG --channels plugin:${PLUGIN_ID}"
+  "$CLAUDE --dangerously-skip-permissions $DEVCHANNELS_FLAG $CONTINUE_FLAG --channels plugin:${PLUGIN_ID}"
 
 # Session startup guard: a Claude Code first-run dialogusait auto-accept-eljuk
 # kulonben a headless session orokre parkolna a prompton es a Telegram plugin

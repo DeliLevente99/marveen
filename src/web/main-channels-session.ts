@@ -85,6 +85,7 @@ function flattenPane(pane: string): string {
 // not exist.
 function autoAcceptStartupDialogs(session: SessionName): void {
   const MAX_ATTEMPTS = 15 // ~15s wallclock; ConPTY-on-WSL paint can be slow
+  let devChannelsHandled = false
   let trustHandled = false
   let bypassHandled = false
   let attempt = 0
@@ -95,7 +96,7 @@ function autoAcceptStartupDialogs(session: SessionName): void {
       return
     }
     if (attempt > MAX_ATTEMPTS) {
-      logger.warn({ session, trustHandled, bypassHandled }, 'Channels session startup-dialog timeout (plugin may not have loaded)')
+      logger.warn({ session, devChannelsHandled, trustHandled, bypassHandled }, 'Channels session startup-dialog timeout (plugin may not have loaded)')
       return
     }
     const pane = agentRuntime.capture(session)
@@ -104,7 +105,20 @@ function autoAcceptStartupDialogs(session: SessionName): void {
       logger.info({ session, attempt }, 'Channels session plugin loaded')
       return
     }
-    if (!trustHandled && /Doyoutrust|Isthisaproject|Itrust|trustthisfolder/i.test(flat)) {
+    // dev-channels warning fires FIRST when --dangerously-load-development-
+    // channels is passed (Discord path). Option 1 = "I am using this for
+    // local development". Must be matched ahead of the other dialogs.
+    if (!devChannelsHandled && /Loadingdevelopmentchannels|Iamusingthisforlocal/i.test(flat)) {
+      devChannelsHandled = true
+      logger.info({ session }, 'Channels session: dev-channels warning detected, auto-accepting (1+Enter)')
+      try {
+        agentRuntime.sendKey(session, '1')
+        agentRuntime.sleepSync(100)
+        agentRuntime.sendKey(session, 'Enter')
+      } catch (err) {
+        logger.warn({ err, session }, 'Failed to send keys for dev-channels auto-accept')
+      }
+    } else if (!trustHandled && /Doyoutrust|Isthisaproject|Itrust|trustthisfolder/i.test(flat)) {
       trustHandled = true
       logger.info({ session }, 'Channels session: trust dialog detected, auto-accepting (1+Enter)')
       try {
@@ -114,7 +128,7 @@ function autoAcceptStartupDialogs(session: SessionName): void {
       } catch (err) {
         logger.warn({ err, session }, 'Failed to send keys for trust auto-accept')
       }
-    } else if (!bypassHandled && trustHandled && /BypassPermissions|Iaccept/i.test(flat)) {
+    } else if (!bypassHandled && /BypassPermissions|Iaccept/i.test(flat)) {
       bypassHandled = true
       logger.info({ session }, 'Channels session: bypass-permissions dialog detected, auto-accepting (2+Enter)')
       try {
@@ -146,6 +160,10 @@ export function startMainChannelsSession(): void {
   const env = buildMainChannelsEnv()
   const args = [
     '--dangerously-skip-permissions',
+    // Discord plugin is not on Claude's org-approved allowlist; this flag
+    // takes a TAGGED entry (`plugin:<id>@<marketplace>` or `server:<id>`)
+    // and bypasses the allowlist check for that specific entry only.
+    ...(CHANNEL_PROVIDER === 'discord' ? ['--dangerously-load-development-channels', `plugin:${provider.pluginId}`] : []),
     '--model', 'claude-sonnet-4-6',
     '--channels', `plugin:${provider.pluginId}`,
   ]
