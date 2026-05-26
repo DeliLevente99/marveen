@@ -18,6 +18,7 @@ import { startWebServer } from './web.js'
 import { logger } from './logger.js'
 import { startInviteMonitor, stopInviteMonitor } from './web/channel-invites.js'
 import { ensureDiscordChannelGroup } from './web/discord-group-bootstrap.js'
+import { patchDiscordPluginIfNeeded } from './web/discord-plugin-patcher.js'
 import { startChannelRequestWatcher, stopChannelRequestWatcher } from './web/channel-request-watcher.js'
 import { AGENTS_BASE_DIR } from './web/agent-config.js'
 import {
@@ -361,6 +362,12 @@ async function main(): Promise<void> {
   // server channels without a manual `/discord:access group add` step.
   // No-op for non-discord providers.
   ensureDiscordChannelGroup()
+
+  // Discord-only: monkey-patch the installed plugin's server.ts with our
+  // vendored version that adds reply_to_user (DM-by-user-id) -- the
+  // operator-notification path depends on it. No-op when discord plugin
+  // isn't installed or version doesn't match the vendored base.
+  patchDiscordPluginIfNeeded()
 
   // Telegram invite auto-approve monitor (one-click pairing).
   startInviteMonitor(MAIN_AGENT_ID, AGENTS_BASE_DIR)
