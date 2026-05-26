@@ -19,6 +19,14 @@ export const SLACK_BOT_TOKEN = env['SLACK_BOT_TOKEN'] ?? ''
 export const SLACK_APP_TOKEN = env['SLACK_APP_TOKEN'] ?? ''
 export const SLACK_CHANNEL_ID = env['SLACK_CHANNEL_ID'] ?? ''
 
+// Operator's Discord user ID -- the human who installed this Marveen.
+// Used by the pairing-request notifier: when a new Discord DM lands as a
+// pending entry, Marveen prompts the channels-session claude to send a
+// dashboard-approval link DM to this user. Also added to access.allowFrom
+// so the bot's reply tool can deliver the DM. One global value per
+// Marveen install; per-agent operator distinctions are out of scope.
+export const OPERATOR_DISCORD_USER_ID = env['OPERATOR_DISCORD_USER_ID'] ?? ''
+
 export const OWNER_NAME = env['OWNER_NAME'] ?? 'Szabolcs'
 export const BOT_NAME = env['BOT_NAME'] ?? 'Marveen'
 

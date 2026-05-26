@@ -1075,6 +1075,7 @@ async function openMarveenDetail() {
     hasSlack: mFull.hasSlack,
     telegramBotUsername: mFull.telegramBotUsername,
     discordChannelId: mFull.discordChannelId || '',
+    operatorDiscordUserId: mFull.operatorDiscordUserId || '',
     running: true,
   })
 
@@ -2033,15 +2034,22 @@ function updateChannelTab(agent) {
     document.getElementById('chRunNotice').hidden = running
     document.getElementById('chRunningNotice').hidden = !running
   }
-  // Discord channel-id field: visible only on Marveen + discord provider.
-  // For sub-agents the channel ID isn't a Marveen-level concept, so leave
-  // the section hidden in that case.
+  // Discord channel-id + operator-id fields: visible only on Marveen +
+  // discord provider. For sub-agents these are not Marveen-level concepts
+  // (sub-agents get their own channel ID later via per-agent UI; operator
+  // is a global Marveen-install setting), so they stay hidden there.
+  const isMarveenDiscord = currentChannelProvider === 'discord' && agent.role === 'main'
   const discordIdGroup = document.getElementById('chDiscordChannelIdGroup')
   const discordIdInput = document.getElementById('chDiscordChannelId')
   if (discordIdGroup && discordIdInput) {
-    const isMarveenDiscord = currentChannelProvider === 'discord' && agent.role === 'main'
     discordIdGroup.hidden = !(connected && isMarveenDiscord)
     if (isMarveenDiscord) discordIdInput.value = agent.discordChannelId || ''
+  }
+  const operatorIdGroup = document.getElementById('chDiscordOperatorIdGroup')
+  const operatorIdInput = document.getElementById('chDiscordOperatorId')
+  if (operatorIdGroup && operatorIdInput) {
+    operatorIdGroup.hidden = !(connected && isMarveenDiscord)
+    if (isMarveenDiscord) operatorIdInput.value = agent.operatorDiscordUserId || ''
   }
   document.getElementById('chTokenInput').value = ''
   const slackInput = document.getElementById('chSlackAppToken')
@@ -2080,6 +2088,34 @@ async function refreshChannelHealth() {
     }
   } catch { /* ignore */ }
 }
+
+document.getElementById('chDiscordOperatorIdSaveBtn').addEventListener('click', async () => {
+  const input = document.getElementById('chDiscordOperatorId')
+  const id = input.value.trim()
+  if (!/^\d{17,20}$/.test(id)) {
+    showToast('Discord user ID 17-20 jegyu szam kell legyen', true)
+    input.focus()
+    return
+  }
+  const btn = document.getElementById('chDiscordOperatorIdSaveBtn')
+  btn.disabled = true
+  try {
+    const res = await fetch('/api/marveen/channels/discord/operator-id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: id }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || 'Mentes sikertelen')
+    }
+    showToast('Operator Discord user ID elmentve')
+  } catch (err) {
+    showToast(`Hiba: ${err.message}`, true)
+  } finally {
+    btn.disabled = false
+  }
+})
 
 document.getElementById('chDiscordChannelIdSaveBtn').addEventListener('click', async () => {
   const input = document.getElementById('chDiscordChannelId')

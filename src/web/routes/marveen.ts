@@ -90,6 +90,7 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       hasSlack: sl.hasSlack,
       telegramBotUsername: tg.botUsername,
       discordChannelId: readMainEnvVar('DISCORD_CHANNEL_ID'),
+      operatorDiscordUserId: readMainEnvVar('OPERATOR_DISCORD_USER_ID'),
       role: 'main',
       personality: soulSection,
       claudeMd,
@@ -144,6 +145,40 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     }
 
     json(res, { ok: true, provider, botName: validation.botName, restartRequired: true })
+    return true
+  }
+
+  // POST /api/marveen/channels/discord/operator-id -- write OPERATOR_DISCORD_USER_ID
+  // into the project .env AND insert the user into access.allowFrom so the
+  // plugin's outbound `reply` tool can DM the operator (the cross-agent
+  // pending-notifier path needs this). Mirrors the channel-id endpoint
+  // pattern: .env write + access.json mutation in one call, no restart.
+  if (path === '/api/marveen/channels/discord/operator-id' && method === 'POST') {
+    const body = await readBody(req)
+    const { userId } = JSON.parse(body.toString()) as { userId?: string }
+    const trimmed = userId?.trim() ?? ''
+    if (!trimmed) { json(res, { error: 'userId is required' }, 400); return true }
+    if (!/^\d{17,20}$/.test(trimmed)) { json(res, { error: 'Discord user ID must be a 17-20 digit snowflake' }, 400); return true }
+
+    setMainEnvVar('OPERATOR_DISCORD_USER_ID', trimmed)
+
+    const stateDir = channelStateDir('discord')
+    mkdirSync(stateDir, { recursive: true })
+    const accessPath = join(stateDir, 'access.json')
+    let access: { dmPolicy?: string; allowFrom?: string[]; groups?: Record<string, unknown>; pending?: Record<string, unknown> } = {
+      dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {},
+    }
+    if (existsSync(accessPath)) {
+      try { access = JSON.parse(readFileOr(accessPath, '{}')) } catch { /* corrupt: start fresh */ }
+    }
+    access.allowFrom = access.allowFrom ?? []
+    if (!access.allowFrom.includes(trimmed)) {
+      access.allowFrom.push(trimmed)
+      atomicWriteFileSync(accessPath, JSON.stringify(access, null, 2))
+      logger.info({ userId: trimmed }, 'discord: operator user ID added to allowFrom')
+    }
+
+    json(res, { ok: true, userId: trimmed })
     return true
   }
 

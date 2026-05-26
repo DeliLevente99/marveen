@@ -30,6 +30,10 @@ import { logger } from '../logger.js'
 import { channelStateDir, type ChannelProviderType } from '../channel-provider.js'
 import { agentDir } from './agent-config.js'
 import { atomicWriteFileSync } from './atomic-write.js'
+import { OPERATOR_DISCORD_USER_ID, WEB_PORT, WEB_HOST } from '../config.js'
+import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sendPromptToSession } from './agent-process.js'
+import { loadOrCreateDashboardToken } from './dashboard-auth.js'
 
 interface InviteEntry {
   createdAt: number
@@ -252,6 +256,45 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
       writeAccess(accessPath, access)
       writeInvites(invitesPath, store)
       logger.info({ name, provider, senderId: pEntry.senderId, token: tToken }, 'Channel invite auto-approved')
+
+      // pendingEntries[0] was just auto-approved above (removed from
+      // access.pending); slice(1) so notify doesn't DM the operator about
+      // an already-approved code.
+      if (provider === 'discord' && name === mainAgentId && OPERATOR_DISCORD_USER_ID) {
+        notifyDiscordPendingsToOperator(accessPath, pendingEntries.slice(1))
+      }
+    }
+  }
+}
+
+// Per-accessPath set of pending codes we have already DM-d the operator
+// about. In-memory only -- a dashboard restart re-notifies for unresolved
+// pendings (acceptable: better re-ping than miss).
+const notifiedOperatorCodes = new Map<string, Set<string>>()
+
+function notifyDiscordPendingsToOperator(
+  accessPath: string,
+  pendingEntries: Array<[string, { senderId: string; chatId: string; createdAt: number; expiresAt: number }]>,
+): void {
+  let notified = notifiedOperatorCodes.get(accessPath)
+  if (!notified) {
+    notified = new Set<string>()
+    notifiedOperatorCodes.set(accessPath, notified)
+  }
+  for (const [code, entry] of pendingEntries) {
+    if (notified.has(code)) continue
+    if (entry.senderId === OPERATOR_DISCORD_USER_ID) continue
+    const token = (() => { try { return loadOrCreateDashboardToken() } catch { return '' } })()
+    const url = `http://${WEB_HOST}:${WEB_PORT}/?token=${token}&pending=${code}`
+    const prompt =
+      `[SYSTEM: discord operator-notify] Új Discord pairing kéres: code \`${code}\` from user@${entry.senderId}. ` +
+      `Hivd meg a mcp__plugin_discord_discord__reply_to_user tool-t user_id="${OPERATOR_DISCORD_USER_ID}" text="Új DM kéri user@${entry.senderId}. Jóváhagyás: ${url}".`
+    try {
+      sendPromptToSession(MAIN_CHANNELS_SESSION, prompt)
+      notified.add(code)
+      logger.info({ code, senderId: entry.senderId, operator: OPERATOR_DISCORD_USER_ID }, 'discord: operator notification prompt dispatched')
+    } catch (err) {
+      logger.warn({ err, code }, 'discord: failed to dispatch operator notification prompt')
     }
   }
 }
