@@ -17,7 +17,7 @@ import { initHeartbeat, stopHeartbeat } from './heartbeat.js'
 import { startWebServer } from './web.js'
 import { logger } from './logger.js'
 import { startInviteMonitor, stopInviteMonitor } from './web/channel-invites.js'
-import { ensureDiscordChannelGroup } from './web/discord-group-bootstrap.js'
+import { ensureDiscordChannelGroup, ensureDiscordSuppressPairingReply } from './web/discord-group-bootstrap.js'
 import { patchDiscordPluginIfNeeded } from './web/discord-plugin-patcher.js'
 import { startChannelRequestWatcher, stopChannelRequestWatcher } from './web/channel-request-watcher.js'
 import { AGENTS_BASE_DIR } from './web/agent-config.js'
@@ -368,6 +368,11 @@ async function main(): Promise<void> {
   // operator-notification path depends on it. No-op when discord plugin
   // isn't installed or version doesn't match the vendored base.
   patchDiscordPluginIfNeeded()
+
+  // Discord-only: ensure the plugin's .env carries DISCORD_SUPPRESS_PAIRING_REPLY=1
+  // so the patched plugin suppresses the noisy /discord:access hint DM
+  // to unknown senders (operator-notify handles approval out-of-band).
+  ensureDiscordSuppressPairingReply()
 
   // Telegram invite auto-approve monitor (one-click pairing).
   startInviteMonitor(MAIN_AGENT_ID, AGENTS_BASE_DIR)

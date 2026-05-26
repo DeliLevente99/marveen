@@ -7310,3 +7310,120 @@ async function setAutonomyLevel(key, level) {
 
   checkStatus()
 })()
+
+
+// === Discord pending-pairing approval modal (boot-time URL handler) ===
+// Operator clicks a DM link from Marveen's invite-monitor. The URL carries
+// ?approve_token=XXX (short-lived, 5 min). We peek the token for details,
+// render a modal with code + sender + expiry, and on Confirm POST to consume
+// + approve. Token is single-use; modal close cancels (token expires).
+;(function initDiscordApproveModal() {
+  function fmtRemainingMs(expiresAtMs) {
+    const ms = expiresAtMs - Date.now()
+    if (ms <= 0) return 'lejart'
+    const s = Math.ceil(ms / 1000)
+    if (s < 60) return s + ' mp mulva'
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0') + ' (mp)'
+  }
+
+  function closeModal() {
+    const ov = document.getElementById('discordApproveOverlay')
+    if (ov) { ov.classList.remove('active'); ov.hidden = true }
+  }
+
+  function showError(msg) {
+    const err = document.getElementById('discordApproveError')
+    if (err) { err.textContent = msg; err.hidden = false }
+    const ok = document.getElementById('discordApproveConfirm')
+    if (ok) ok.disabled = true
+  }
+
+  async function openModalFor(token) {
+    const ov = document.getElementById('discordApproveOverlay')
+    if (!ov) return
+    // The .modal-overlay default CSS sets opacity:0 + visibility:hidden;
+    // the .active class is what actually makes the modal visible -- the
+    // `hidden` attribute alone is insufficient (visibility:hidden still
+    // hides the modal even with hidden attr removed).
+    ov.hidden = false
+    ov.classList.add('active')
+    document.getElementById('discordApproveError').hidden = true
+    document.getElementById('discordApproveConfirm').disabled = false
+    document.getElementById('discordApproveCode').textContent = '…'
+    document.getElementById('discordApproveSender').textContent = '…'
+    document.getElementById('discordApproveExpires').textContent = '…'
+
+    let entry
+    try {
+      const res = await fetch('/api/marveen/channels/discord/approve-token/' + encodeURIComponent(token))
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        showError(err.error || 'Token ervenytelen vagy lejart')
+        return
+      }
+      entry = await res.json()
+    } catch (e) {
+      showError('Halozati hiba: ' + e.message)
+      return
+    }
+    document.getElementById('discordApproveCode').textContent = entry.code
+    document.getElementById('discordApproveSender').textContent = entry.senderId
+    document.getElementById('discordApproveExpires').textContent = fmtRemainingMs(entry.expiresAt)
+
+    // Live countdown until expiry; disable confirm when it runs out.
+    const tick = setInterval(() => {
+      const span = document.getElementById('discordApproveExpires')
+      if (!span || ov.hidden) { clearInterval(tick); return }
+      span.textContent = fmtRemainingMs(entry.expiresAt)
+      if (Date.now() >= entry.expiresAt) {
+        clearInterval(tick)
+        showError('Token lejart -- kerj uj DM-et')
+      }
+    }, 1000)
+
+    document.getElementById('discordApproveConfirm').onclick = async () => {
+      const btn = document.getElementById('discordApproveConfirm')
+      btn.disabled = true
+      try {
+        const res = await fetch('/api/marveen/channels/discord/approve-via-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          showError(err.error || 'Approve sikertelen')
+          return
+        }
+        showToast('Discord user jovahagyva')
+        clearInterval(tick)
+        closeModal()
+      } catch (e) {
+        showError(e.message)
+      }
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('discordApproveClose')?.addEventListener('click', closeModal)
+    document.getElementById('discordApproveCancel')?.addEventListener('click', closeModal)
+    document.getElementById('discordApproveOverlay')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) closeModal()
+    })
+    document.addEventListener('keydown', (e) => {
+      const ov = document.getElementById('discordApproveOverlay')
+      if (e.key === 'Escape' && ov && !ov.hidden) closeModal()
+    })
+
+    // Boot: detect ?approve_token=XXX in the URL, strip it (the token is
+    // single-use; leaving it in the visible URL invites accidental reshare).
+    const params = new URLSearchParams(window.location.search)
+    const t = params.get('approve_token')
+    if (t) {
+      params.delete('approve_token')
+      const clean = window.location.pathname + (params.toString() ? '?' + params : '') + window.location.hash
+      window.history.replaceState({}, '', clean)
+      openModalFor(t)
+    }
+  })
+})()
