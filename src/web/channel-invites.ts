@@ -27,13 +27,12 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from 
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { logger } from '../logger.js'
-import { channelStateDir, type ChannelProviderType } from '../channel-provider.js'
+import { channelStateDir, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { agentDir } from './agent-config.js'
 import { atomicWriteFileSync } from './atomic-write.js'
-import { OPERATOR_DISCORD_USER_ID, WEB_PORT, WEB_HOST } from '../config.js'
-import { MAIN_CHANNELS_SESSION } from './main-agent.js'
-import { sendPromptToSession } from './agent-process.js'
+import { WEB_PORT, WEB_HOST, PROJECT_ROOT } from '../config.js'
 import { loadOrCreateDashboardToken } from './dashboard-auth.js'
+import { mintApproveToken } from './discord-approve-tokens.js'
 
 interface InviteEntry {
   createdAt: number
@@ -193,7 +192,7 @@ export function revokeInvite(accessPath: string, token: string): boolean {
 }
 
 export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): void {
-  const providerTypes: ChannelProviderType[] = ['telegram', 'slack']
+  const providerTypes: ChannelProviderType[] = ['telegram', 'slack', 'discord']
 
   for (const provider of providerTypes) {
     const targets: Array<{ name: string; accessPath: string }> = []
@@ -264,11 +263,24 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
       writeInvites(invitesPath, store)
       logger.info({ name, provider, senderId: pEntry.senderId, token: tToken }, 'Channel invite auto-approved')
 
-      // pendingEntries[0] was just auto-approved above (removed from
-      // access.pending); slice(1) so notify doesn't DM the operator about
-      // an already-approved code.
-      if (provider === 'discord' && name === mainAgentId && OPERATOR_DISCORD_USER_ID) {
-        notifyDiscordPendingsToOperator(accessPath, pendingEntries.slice(1))
+      // Discord operator-DM notification: the bot DMs the operator with
+      // a dashboard approve link for each new pending request. Only fires
+      // for the main agent (Marveen) + Discord provider + when the
+      // operator's user ID is configured. The notification goes through
+      // the channels-session claude (sendPromptToSession), which then
+      // invokes the discord plugin's reply tool to actually deliver the
+      // DM. We track already-notified codes in-memory to avoid spamming
+      // claude on every 3s tick.
+      if (provider === 'discord' && name === mainAgentId) {
+        // Re-read .env each tick instead of importing the boot-cached
+        // constant: the operator typically saves OPERATOR_DISCORD_USER_ID
+        // via the dashboard UI AFTER the dashboard has booted, so the
+        // in-process config.ts value is stale at the first save -- the
+        // /api/marveen/channels/discord/operator-id endpoint writes the
+        // .env directly. (The cached const would force a dashboard
+        // restart after every operator-id change.)
+        const operatorId = readOperatorDiscordUserId()
+        if (operatorId) notifyDiscordPendingsToOperator(accessPath, pendingEntries, operatorId)
       }
     }
   }
@@ -281,7 +293,8 @@ const notifiedOperatorCodes = new Map<string, Set<string>>()
 
 function notifyDiscordPendingsToOperator(
   accessPath: string,
-  pendingEntries: Array<[string, { senderId: string; chatId: string; createdAt: number; expiresAt: number }]>,
+  pendingEntries: Array<[string, { senderId: string; chatId: string; createdAt: number; expiresAt: number; groupChannelId?: string }]>,
+  operatorId: string,
 ): void {
   let notified = notifiedOperatorCodes.get(accessPath)
   if (!notified) {
@@ -290,19 +303,76 @@ function notifyDiscordPendingsToOperator(
   }
   for (const [code, entry] of pendingEntries) {
     if (notified.has(code)) continue
-    if (entry.senderId === OPERATOR_DISCORD_USER_ID) continue
-    const token = (() => { try { return loadOrCreateDashboardToken() } catch { return '' } })()
-    const url = `http://${WEB_HOST}:${WEB_PORT}/?token=${token}&pending=${code}`
-    const prompt =
-      `[SYSTEM: discord operator-notify] Új Discord pairing kéres: code \`${code}\` from user@${entry.senderId}. ` +
-      `Hivd meg a mcp__plugin_discord_discord__reply_to_user tool-t user_id="${OPERATOR_DISCORD_USER_ID}" text="Új DM kéri user@${entry.senderId}. Jóváhagyás: ${url}".`
-    try {
-      sendPromptToSession(MAIN_CHANNELS_SESSION, prompt)
-      notified.add(code)
-      logger.info({ code, senderId: entry.senderId, operator: OPERATOR_DISCORD_USER_ID }, 'discord: operator notification prompt dispatched')
-    } catch (err) {
-      logger.warn({ err, code }, 'discord: failed to dispatch operator notification prompt')
-    }
+    // Skip if the sender IS the operator (don't DM yourself).
+    if (entry.senderId === operatorId) continue
+    const dashboardToken = (() => { try { return loadOrCreateDashboardToken() } catch { return '' } })()
+    const approveToken = mintApproveToken(code, entry.senderId)
+    const url = `http://${WEB_HOST}:${WEB_PORT}/?token=${dashboardToken}&approve_token=${approveToken}`
+    const context = entry.groupChannelId
+      ? `szerver csatorna <#${entry.groupChannelId}>`
+      : 'DM'
+    const text = `Új ${context} kéri user@${entry.senderId} (code: ${code}). Jóváhagyás (5 perc): ${url}`
+    // Fire-and-forget so a Discord API stall doesn't block the tick.
+    // notified.add stays in the promise chain so a failed call retries
+    // on the next 3s tick.
+    sendDiscordDM(operatorId, text).then(() => {
+      notified!.add(code)
+      logger.info({ code, senderId: entry.senderId, operator: operatorId }, 'discord: operator notification DM sent')
+    }).catch((err) => {
+      logger.warn({ err: err instanceof Error ? err.message : String(err), code }, 'discord: failed to send operator notification DM')
+    })
+  }
+}
+
+// Direct Discord REST API DM. Bypasses the channels-session claude (which
+// reads our notification prompt but can't be relied on to call the MCP
+// tool deterministically -- observed: claude folds the notification into
+// a scheduled-task response instead of invoking reply_to_user). Two
+// hops: create-DM-channel + send-message.
+async function sendDiscordDM(userId: string, content: string): Promise<void> {
+  const envPath = join(channelStateDir('discord'), '.env')
+  const token = readChannelToken('discord', envPath)
+  if (!token) throw new Error('DISCORD_BOT_TOKEN missing at ' + envPath)
+
+  const headers = {
+    Authorization: `Bot ${token}`,
+    'Content-Type': 'application/json',
+    'User-Agent': 'Marveen/0 (operator-notify; +https://github.com/Szotasz/marveen)',
+  }
+  // Step 1: open (or get existing) DM channel with the recipient.
+  const openRes = await fetch('https://discord.com/api/v10/users/@me/channels', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ recipient_id: userId }),
+  })
+  if (!openRes.ok) {
+    const body = await openRes.text().catch(() => '')
+    throw new Error(`open-DM HTTP ${openRes.status}: ${body.slice(0, 200)}`)
+  }
+  const channel = await openRes.json() as { id?: string }
+  if (!channel.id) throw new Error('open-DM response missing channel id')
+
+  // Step 2: send the message.
+  const sendRes = await fetch(`https://discord.com/api/v10/channels/${channel.id}/messages`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ content }),
+  })
+  if (!sendRes.ok) {
+    const body = await sendRes.text().catch(() => '')
+    throw new Error(`send-message HTTP ${sendRes.status}: ${body.slice(0, 200)}`)
+  }
+}
+
+// Dynamic re-read of OPERATOR_DISCORD_USER_ID from project .env. See the
+// comment in the call site for the boot-cached-constant rationale.
+function readOperatorDiscordUserId(): string {
+  try {
+    const content = readFileSync(join(PROJECT_ROOT, '.env'), 'utf-8')
+    const m = content.match(/^OPERATOR_DISCORD_USER_ID=(.+)$/m)
+    return (m?.[1] ?? '').trim()
+  } catch {
+    return ''
   }
 }
 

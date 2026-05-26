@@ -95,6 +95,11 @@ type PendingEntry = {
   createdAt: number
   expiresAt: number
   replies: number
+  // MARVEEN-PATCH: server-channel pending. When set, this pending was
+  // created from a server-channel message (not a DM); approval should
+  // populate `groups[groupChannelId].allowFrom` instead of the top-
+  // level `allowFrom`. Absent for the original DM-pending flow.
+  groupChannelId?: string
 }
 
 type GroupPolicy = {
@@ -285,7 +290,38 @@ async function gate(msg: Message): Promise<GateResult> {
   const groupAllowFrom = policy.allowFrom ?? []
   const requireMention = policy.requireMention ?? true
   if (groupAllowFrom.length > 0 && !groupAllowFrom.includes(senderId)) {
-    return { action: 'drop' }
+    // MARVEEN-PATCH: server-channel pending. When dmPolicy is 'pairing'
+    // and the sender isn't on the per-channel allowlist, mint a pending
+    // entry (just like the DM branch) so the out-of-band operator-notify
+    // path can prompt the operator to approve. The pending row carries
+    // `groupChannelId` so the approve flow knows to mutate
+    // `groups[channelId].allowFrom` instead of the top-level allowFrom.
+    if (access.dmPolicy !== 'pairing') return { action: 'drop' }
+    // Re-pair guard: same sender + same channel → bump replies (don't
+    // hammer the operator with notify spam on chatty users).
+    for (const [code, p] of Object.entries(access.pending)) {
+      if (p.senderId === senderId && p.groupChannelId === channelId) {
+        if ((p.replies ?? 1) >= 2) return { action: 'drop' }
+        p.replies = (p.replies ?? 1) + 1
+        saveAccess(access)
+        return { action: 'pair', code, isResend: true }
+      }
+    }
+    // Cap pending at 5 across all sources -- avoids unbounded notify
+    // pressure when a server channel is being spammed.
+    if (Object.keys(access.pending).length >= 5) return { action: 'drop' }
+    const code = randomBytes(3).toString('hex')
+    const now = Date.now()
+    access.pending[code] = {
+      senderId,
+      chatId: msg.channel.id, // the server channel, not a DM
+      groupChannelId: channelId,
+      createdAt: now,
+      expiresAt: now + 60 * 60 * 1000, // 1 hour, same as DM pending
+      replies: 1,
+    }
+    saveAccess(access)
+    return { action: 'pair', code, isResend: false }
   }
   if (requireMention && !(await isMentioned(msg, access.mentionPatterns))) {
     return { action: 'drop' }
@@ -893,6 +929,13 @@ async function handleInbound(msg: Message): Promise<void> {
   if (result.action === 'drop') return
 
   if (result.action === 'pair') {
+    // MARVEEN-PATCH: when DISCORD_SUPPRESS_PAIRING_REPLY=1, do not send
+    // the pairing-code DM back to the sender. Marveen handles approval
+    // via an out-of-band operator-notification path, so the
+    // "/discord:access pair XXXXXX" hint is misleading to the sender
+    // (they shouldn't run anything). The pending entry is still written
+    // to access.json -- only the visible sender-side reply is skipped.
+    if (process.env.DISCORD_SUPPRESS_PAIRING_REPLY === '1') return
     const lead = result.isResend ? 'Still pending' : 'Pairing required'
     try {
       await msg.reply(

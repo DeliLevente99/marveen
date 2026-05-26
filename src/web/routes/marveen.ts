@@ -12,6 +12,7 @@ import { readActiveModelFromProjectDir } from '../active-model.js'
 import { atomicWriteFileSync } from '../atomic-write.js'
 import { getProvider, channelStateDir, type ChannelProviderType } from '../../channel-provider.js'
 import { logger } from '../../logger.js'
+import { peekApproveToken, consumeApproveToken } from '../discord-approve-tokens.js'
 import type { RouteContext } from './types.js'
 
 function getActiveMarveenModel(): string {
@@ -145,6 +146,95 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     }
 
     json(res, { ok: true, provider, botName: validation.botName, restartRequired: true })
+    return true
+  }
+
+  // GET /api/marveen/channels/discord/approve-token/:token -- non-destructive
+  // peek for the dashboard's "approve pairing?" confirmation modal. Returns
+  // the pending code + sender + expiry so the UI can render a meaningful
+  // prompt. 404 when the token is unknown or already expired/consumed.
+  const peekMatch = path.match(/^\/api\/marveen\/channels\/discord\/approve-token\/([A-Za-z0-9_-]{16,64})$/)
+  if (peekMatch && method === 'GET') {
+    const entry = peekApproveToken(peekMatch[1])
+    if (!entry) { json(res, { error: 'token unknown or expired' }, 404); return true }
+    json(res, { code: entry.code, senderId: entry.senderId, expiresAt: entry.expiresAt })
+    return true
+  }
+
+  // POST /api/marveen/channels/discord/approve-via-token -- consume the
+  // one-time approve token and approve the corresponding pending entry.
+  // Mirrors the /discord:access pair skill's mutation: move senderId to
+  // allowFrom, drop pending[code], write the approved/<senderId> marker
+  // so the plugin's checkApprovals poll sends the "you're in" confirm.
+  if (path === '/api/marveen/channels/discord/approve-via-token' && method === 'POST') {
+    const body = await readBody(req)
+    const { token } = JSON.parse(body.toString()) as { token?: string }
+    if (!token) { json(res, { error: 'token is required' }, 400); return true }
+    const entry = consumeApproveToken(token)
+    if (!entry) { json(res, { error: 'token unknown or expired' }, 404); return true }
+
+    const stateDir = channelStateDir('discord')
+    const accessPath = join(stateDir, 'access.json')
+    if (!existsSync(accessPath)) { json(res, { error: 'discord access.json missing' }, 500); return true }
+    let access: { dmPolicy?: string; allowFrom?: string[]; groups?: Record<string, { requireMention?: boolean; allowFrom?: string[] } | Record<string, unknown>>; pending?: Record<string, { senderId: string; chatId: string; createdAt: number; expiresAt: number; replies?: number; groupChannelId?: string }> }
+    try { access = JSON.parse(readFileOr(accessPath, '{}')) } catch { json(res, { error: 'access.json corrupt' }, 500); return true }
+
+    const pending = access.pending?.[entry.code]
+    if (!pending) {
+      // Could have been resolved another way (TOFU, manual /discord:access).
+      // Idempotent: succeed silently.
+      json(res, { ok: true, alreadyResolved: true })
+      return true
+    }
+    // Sanity: the token's senderId must match the pending row -- defends
+    // against the (extremely unlikely) case where the pending code was
+    // recycled after our token was minted.
+    if (pending.senderId !== entry.senderId) {
+      json(res, { error: 'token-pending senderId mismatch' }, 409)
+      return true
+    }
+
+    // Server-channel pending: mutate groups[channelId].allowFrom instead
+    // of top-level allowFrom. The plugin's server-branch gate checks
+    // the per-channel list; the top-level allowFrom is DM-only.
+    if (pending.groupChannelId) {
+      access.groups = access.groups ?? {}
+      const existing = access.groups[pending.groupChannelId] as { requireMention?: boolean; allowFrom?: string[] } | undefined
+      const groupEntry = (existing && typeof existing === 'object')
+        ? { requireMention: existing.requireMention ?? false, allowFrom: Array.isArray(existing.allowFrom) ? [...existing.allowFrom] : [] }
+        : { requireMention: false, allowFrom: [] }
+      if (!groupEntry.allowFrom.includes(pending.senderId)) groupEntry.allowFrom.push(pending.senderId)
+      access.groups[pending.groupChannelId] = groupEntry
+    } else {
+      access.allowFrom = access.allowFrom ?? []
+      if (!access.allowFrom.includes(pending.senderId)) access.allowFrom.push(pending.senderId)
+    }
+    // Cleanup stale pending entries for the same sender. Without this, a
+    // sender who DM'd before server-approve gets stuck (their DM pending
+    // is still there with replies>=2 -> plugin gate drops new DMs silently).
+    // Removing the stale rows lets a fresh DM mint a fresh pending and
+    // trigger a new operator-notify cycle. The just-consumed approve
+    // token's pending row is included in this sweep (delete is idempotent).
+    let cleanedOthers = 0
+    for (const [otherCode, otherEntry] of Object.entries(access.pending!)) {
+      if (otherEntry.senderId === pending.senderId) {
+        delete access.pending![otherCode]
+        if (otherCode !== entry.code) cleanedOthers++
+      }
+    }
+    if (cleanedOthers > 0) logger.info({ senderId: pending.senderId, cleanedOthers }, 'discord approve: cleaned up stale pending entries for sender')
+    atomicWriteFileSync(accessPath, JSON.stringify(access, null, 2))
+
+    try {
+      const approvedDir = join(stateDir, 'approved')
+      mkdirSync(approvedDir, { recursive: true })
+      writeFileSync(join(approvedDir, pending.senderId), pending.chatId)
+    } catch (err) {
+      logger.warn({ err, senderId: pending.senderId }, 'discord approve-via-token: failed to write approved marker (plugin "you\'re in" confirmation will not fire)')
+    }
+
+    logger.info({ code: entry.code, senderId: pending.senderId }, 'discord pending approved via short-lived token')
+    json(res, { ok: true, senderId: pending.senderId })
     return true
   }
 

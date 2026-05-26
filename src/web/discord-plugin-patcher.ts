@@ -45,8 +45,10 @@ const PLUGIN_BASE = join(homedir(), '.claude', 'plugins', 'cache', 'claude-plugi
 
 // Unique string present only in the patched server.ts. Used as the
 // "already patched" detection; if you change the patch contents, change
-// this marker too.
-const PATCH_MARKER = "name: 'reply_to_user'"
+// this marker too. Bumping the marker forces re-apply of the vendored
+// file -- needed when the patch grows (e.g., the pair-reply suppression
+// added on top of reply_to_user).
+const PATCH_MARKER = 'MARVEEN-PATCH: server-channel pending'
 
 export function patchDiscordPluginIfNeeded(): void {
   if (!existsSync(PLUGIN_BASE)) return // plugin not installed; nothing to do

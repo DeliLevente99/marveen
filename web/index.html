@@ -2016,6 +2016,32 @@
 
   <div class="toast" id="toast"></div>
 
+  <!-- Discord pending-pairing approval modal. Driven by ?approve_token=XXX
+       in the URL (operator clicks a DM link from Marveen's invite-monitor).
+       The token expires 5 minutes after mint; the dashboard frontend
+       fetches its details for context, then POSTs to consume + approve. -->
+  <div class="modal-overlay" id="discordApproveOverlay" hidden>
+    <div class="modal-content" style="max-width:480px;">
+      <div class="modal-header">
+        <h3>Discord pairing jóváhagyás</h3>
+        <button class="modal-close" id="discordApproveClose">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-desc">Új Discord user kéri a DM hozzáférést a Marveen bothoz.</p>
+        <div id="discordApproveDetails" style="background:var(--bg-secondary,#1a1a2e); padding:10px; border-radius:6px; margin-top:10px; font-family:monospace; font-size:13px;">
+          <div>Code: <span id="discordApproveCode">…</span></div>
+          <div>Sender: user@<span id="discordApproveSender">…</span></div>
+          <div>Lejár: <span id="discordApproveExpires">…</span></div>
+        </div>
+        <div id="discordApproveError" hidden style="color:var(--danger,#ef4444); margin-top:10px;"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="discordApproveCancel">Mégsem</button>
+        <button class="btn-primary" id="discordApproveConfirm">Jóváhagyás</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/app.js"></script>
 </body>
 </html>
