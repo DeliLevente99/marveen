@@ -1,12 +1,57 @@
-import { existsSync, unlinkSync, copyFileSync, writeFileSync } from 'node:fs'
+import { existsSync, unlinkSync, copyFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, extname } from 'node:path'
-import { PROJECT_ROOT, OWNER_NAME, BOT_NAME } from '../../config.js'
+import { homedir } from 'node:os'
+import { PROJECT_ROOT, OWNER_NAME, BOT_NAME, CHANNEL_PROVIDER } from '../../config.js'
 import { readMarveenTelegramConfig, sendMarveenAvatarChange } from '../telegram.js'
 import { hardRestartMarveenChannels } from '../channel-monitor.js'
 import { readFileOr } from '../agent-config.js'
 import { parseMultipart } from '../multipart.js'
 import { readBody, json, serveFile } from '../http-helpers.js'
+import { atomicWriteFileSync } from '../atomic-write.js'
+import { getProvider, channelStateDir, type ChannelProviderType } from '../../channel-provider.js'
+import { logger } from '../../logger.js'
 import type { RouteContext } from './types.js'
+
+// Probe the global ~/.claude/channels/<provider>/.env for a token of the
+// given provider. Mirrors readMarveenTelegramConfig but is generic across
+// providers. Returns true iff the primary env-key has a non-empty value.
+function marveenChannelHasToken(provider: ChannelProviderType): boolean {
+  const envPath = join(homedir(), '.claude', 'channels', provider, '.env')
+  if (!existsSync(envPath)) return false
+  const content = readFileOr(envPath, '')
+  const key = getProvider(provider).envKeys[0]
+  const m = content.match(new RegExp(`^${key}=(.+)$`, 'm'))
+  return !!m && !!m[1].trim()
+}
+
+// Rewrite (or insert) CHANNEL_PROVIDER in PROJECT_ROOT/.env. Operates on
+// the raw file rather than reloading the in-process `CHANNEL_PROVIDER`
+// constant (which is set at boot via src/config.ts) -- channels.sh /
+// main-channels-session.ts both re-read .env when spawning, so the next
+// restart picks up the new value.
+function setMainChannelProvider(provider: ChannelProviderType): void {
+  const envPath = join(PROJECT_ROOT, '.env')
+  let content = ''
+  try { content = readFileOr(envPath, '') } catch { /* missing is fine */ }
+  const lines = content.split(/\r?\n/)
+  let found = false
+  const next: string[] = []
+  for (const line of lines) {
+    if (/^CHANNEL_PROVIDER=/.test(line)) {
+      next.push(`CHANNEL_PROVIDER=${provider}`)
+      found = true
+    } else {
+      next.push(line)
+    }
+  }
+  if (!found) {
+    // Drop trailing empty line if present, then append + keep one trailing newline
+    if (next.length > 0 && next[next.length - 1] === '') next.pop()
+    next.push(`CHANNEL_PROVIDER=${provider}`)
+    next.push('')
+  }
+  atomicWriteFileSync(envPath, next.join('\n'), { mode: 0o600 })
+}
 
 export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promise<boolean> {
   const { req, res, path, method } = ctx
@@ -27,7 +72,10 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       description,
       model: 'claude-opus-4-6',
       running: true,
+      channelProvider: CHANNEL_PROVIDER,
       hasTelegram: tg.hasTelegram,
+      hasSlack: marveenChannelHasToken('slack'),
+      hasDiscord: marveenChannelHasToken('discord'),
       telegramBotUsername: tg.botUsername,
       role: 'main',
       personality: soulSection,
@@ -36,6 +84,59 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       mcpJson,
       readonly: true,
     })
+    return true
+  }
+
+  // POST /api/marveen/channels/:provider -- bind/replace the main agent's
+  // channel provider via the dashboard. Writes the plugin token .env into
+  // ~/.claude/channels/<provider>/, seeds an empty access.json (TOFU will
+  // claim the first DM), flips project .env's CHANNEL_PROVIDER, and kicks
+  // off a channels-session restart so the change takes effect immediately.
+  // Plugin install is NOT performed here: claude plugin install must have
+  // been run once by the operator (the marketplace add itself is an
+  // interactive call we don't want to shell out from an HTTP handler).
+  // Slack-specific managed-settings allowlist is also not enforced from
+  // this path -- match the per-agent setup's behavior on the same gate.
+  const marveenChannelMatch = path.match(/^\/api\/marveen\/channels\/(telegram|slack|discord)$/)
+  if (marveenChannelMatch && method === 'POST') {
+    const provider = marveenChannelMatch[1] as ChannelProviderType
+    const body = await readBody(req)
+    const { botToken, appToken } = JSON.parse(body.toString()) as { botToken?: string; appToken?: string }
+    if (!botToken?.trim()) { json(res, { error: 'botToken is required' }, 400); return true }
+
+    const channelProvider = getProvider(provider)
+    const validation = await channelProvider.validateToken(botToken.trim())
+    if (!validation.ok) { json(res, { error: validation.error || 'Invalid token' }, 400); return true }
+
+    const stateDir = channelStateDir(provider)
+    mkdirSync(stateDir, { recursive: true })
+    const tokenKey = channelProvider.envKeys[0]
+    let envContent = `${tokenKey}=${botToken.trim()}\n`
+    if (provider === 'slack' && appToken?.trim() && channelProvider.envKeys.includes('SLACK_APP_TOKEN')) {
+      envContent += `SLACK_APP_TOKEN=${appToken.trim()}\n`
+    }
+    atomicWriteFileSync(join(stateDir, '.env'), envContent, { mode: 0o600 })
+    if (!existsSync(join(stateDir, 'access.json'))) {
+      atomicWriteFileSync(join(stateDir, 'access.json'), JSON.stringify({
+        dmPolicy: 'pairing',
+        allowFrom: [],
+        groups: {},
+        pending: {},
+      }, null, 2))
+    }
+
+    // Switch project .env's CHANNEL_PROVIDER. The dashboard reads this on
+    // boot (via config.ts) -- so the in-process CHANNEL_PROVIDER constant
+    // stays stale until restart, but channels.sh (POSIX) and main-channels-
+    // session.ts (Windows) both re-read .env at spawn time so the next
+    // session uses the new provider.
+    setMainChannelProvider(provider)
+
+    try { hardRestartMarveenChannels() } catch (err) {
+      logger.warn({ err }, 'hardRestartMarveenChannels failed after Marveen channel setup; manual restart required')
+    }
+
+    json(res, { ok: true, provider, botName: validation.botName, restartRequired: true })
     return true
   }
 
