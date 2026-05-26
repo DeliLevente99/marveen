@@ -1002,11 +1002,25 @@ async function openMarveenDetail() {
   } catch {}
   applyMarveenReadonlyMode(true)
 
-  // Telegram tab -- without this the tab stays in the default "not connected"
-  // view even though the bot is running and receiving messages.
+  // Channel tab -- reflect the active provider + its connection state so
+  // the setup form is reachable for Marveen too (filesystem-managed but
+  // editable via /api/marveen/channels/:provider). Previously this was
+  // hard-coded to hasTelegram: true, which trapped the operator in the
+  // "already connected" view and hid the provider-switch path on the web.
+  if (mFull.channelProvider) currentChannelProvider = mFull.channelProvider
+  const providerSelect = document.getElementById('chProviderSelect')
+  if (providerSelect) providerSelect.value = currentChannelProvider
+  updateProviderUI()
+  // Pass the per-provider flags through unmodified so updateChannelTab can
+  // pick the right one when the operator switches the dropdown later
+  // (re-spoofing only hasTelegram traps the view in the connected state
+  // for the provider we booted on).
   updateChannelTab({
     name: 'marveen',
-    hasTelegram: mFull.hasTelegram !== undefined ? mFull.hasTelegram : true,
+    role: 'main',
+    hasTelegram: !!mFull.hasTelegram,
+    hasSlack: !!mFull.hasSlack,
+    hasDiscord: !!mFull.hasDiscord,
     telegramBotUsername: mFull.telegramBotUsername,
     running: true,
   })
@@ -1377,7 +1391,18 @@ function stopChannelAutoPoll() {
 }
 
 function channelApiBase() {
+  // Per-agent base; Marveen is also served here for sub-resources
+  // (pending/allowed/invites) because those handlers in routes/agents.ts
+  // already special-case MAIN_AGENT_ID and read the global access.json.
+  // SETUP (POST/DELETE base) is the only Marveen-specific path; callers
+  // that need it pick the URL explicitly via marveenChannelSetupUrl().
   return `/api/agents/${encodeURIComponent(currentAgent.name)}/channels/${currentChannelProvider}`
+}
+
+// URL the SETUP POST/DELETE on Marveen's channel should target. Sub-agents
+// keep using channelApiBase(); only the base-URL setup verb differs.
+function marveenChannelSetupUrl() {
+  return `/api/marveen/channels/${currentChannelProvider}`
 }
 
 function switchAgentTab(tab) {
@@ -1552,7 +1577,18 @@ function updateProviderUI() {
 }
 
 function updateChannelTab(agent) {
-  const connected = agent.hasTelegram || false
+  // The "connected" view should reflect the provider the dropdown is on,
+  // NOT a hard-coded hasTelegram check -- otherwise switching the dropdown
+  // to Discord on a Telegram-configured agent leaves the operator stuck in
+  // the Telegram connected view with no way to reach the Discord setup
+  // form. Each provider has its own state on `agent` (hasTelegram /
+  // hasSlack / hasDiscord); fall through to false if a provider's flag is
+  // missing (per-agent GET historically only returned hasTelegram).
+  const connected = currentChannelProvider === 'discord'
+    ? !!agent.hasDiscord
+    : currentChannelProvider === 'slack'
+      ? !!agent.hasSlack
+      : !!agent.hasTelegram
   const running = agent.running || false
   document.getElementById('chNotConnected').hidden = connected
   document.getElementById('chConnected').hidden = !connected
@@ -1625,7 +1661,8 @@ document.getElementById('chConnectBtn').addEventListener('click', async () => {
   btn.querySelector('.btn-loading').hidden = false
 
   try {
-    const res = await fetch(`${channelApiBase()}`, {
+    const setupUrl = currentAgent.role === 'main' ? marveenChannelSetupUrl() : channelApiBase()
+    const res = await fetch(setupUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1642,9 +1679,11 @@ document.getElementById('chConnectBtn').addEventListener('click', async () => {
       throw new Error(err.error || 'Kapcsolodasi hiba')
     }
     const result = await res.json()
-    showToast(`${currentChannelProvider === 'telegram' ? 'Telegram' : 'Slack'} sikeresen csatlakoztatva!`)
-    // Refresh detail
-    await openAgentDetail(currentAgent.name)
+    const label = currentChannelProvider === 'discord' ? 'Discord' : currentChannelProvider === 'slack' ? 'Slack' : 'Telegram'
+    showToast(`${label} sikeresen csatlakoztatva!`)
+    // Refresh detail -- Marveen lives at /api/marveen, sub-agents at /api/agents
+    if (currentAgent.role === 'main') { await openMarveenDetail() }
+    else { await openAgentDetail(currentAgent.name) }
     loadAgents()
   } catch (err) {
     showToast(`Hiba: ${err.message}`)
