@@ -35,6 +35,10 @@ import { logger } from '../logger.js'
 import { channelStateDir, type ChannelProviderType } from '../channel-provider.js'
 import { agentDir } from './agent-config.js'
 import { atomicWriteFileSync } from './atomic-write.js'
+import { OPERATOR_DISCORD_USER_ID, WEB_PORT, WEB_HOST } from '../config.js'
+import { MAIN_CHANNELS_SESSION } from './main-agent.js'
+import { sendPromptToSession } from './agent-process.js'
+import { loadOrCreateDashboardToken } from './dashboard-auth.js'
 
 interface InviteEntry {
   createdAt: number
@@ -247,6 +251,54 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
         access.dmPolicy = 'allowlist'
         writeAccess(accessPath, access)
       }
+
+      // Discord operator-DM notification: the bot DMs the operator with
+      // a dashboard approve link for each new pending request. Only fires
+      // for the main agent (Marveen) + Discord provider + when the
+      // operator's user ID is configured. The notification goes through
+      // the channels-session claude (sendPromptToSession), which then
+      // invokes the discord plugin's reply tool to actually deliver the
+      // DM. We track already-notified codes in-memory to avoid spamming
+      // claude on every 3s tick.
+      if (provider === 'discord' && name === mainAgentId && OPERATOR_DISCORD_USER_ID) {
+        notifyDiscordPendingsToOperator(accessPath, pendingEntries)
+      }
+    }
+  }
+}
+
+// Per-accessPath set of pending codes we've already DM'd the operator
+// about. In-memory only -- a dashboard restart re-notifies the operator
+// for unresolved pendings (acceptable: better re-ping than miss).
+const notifiedOperatorCodes = new Map<string, Set<string>>()
+
+function notifyDiscordPendingsToOperator(
+  accessPath: string,
+  pendingEntries: Array<[string, { senderId: string; chatId: string; createdAt: number; expiresAt: number }]>,
+): void {
+  let notified = notifiedOperatorCodes.get(accessPath)
+  if (!notified) {
+    notified = new Set<string>()
+    notifiedOperatorCodes.set(accessPath, notified)
+  }
+  for (const [code, entry] of pendingEntries) {
+    if (notified.has(code)) continue
+    // Skip if the sender IS the operator (don't DM yourself).
+    if (entry.senderId === OPERATOR_DISCORD_USER_ID) continue
+    // The dashboard URL the operator clicks to approve. The `?pending=`
+    // query param is a hint for a future deep-link handler; today the
+    // operator opens the Discord channel-tab pending list manually.
+    const token = (() => { try { return loadOrCreateDashboardToken() } catch { return '' } })()
+    const url = `http://${WEB_HOST}:${WEB_PORT}/?token=${token}&pending=${code}`
+    const prompt =
+      `[SYSTEM: discord operator-notify] Új Discord pairing kéres: code \`${code}\` from user@${entry.senderId}. ` +
+      `Hivd meg a mcp__plugin_discord_discord__reply_to_user tool-t user_id="${OPERATOR_DISCORD_USER_ID}" text="Új DM kéri user@${entry.senderId}. Jóváhagyás: ${url}".`
+    try {
+      sendPromptToSession(MAIN_CHANNELS_SESSION, prompt)
+      notified.add(code)
+      logger.info({ code, senderId: entry.senderId, operator: OPERATOR_DISCORD_USER_ID }, 'discord: operator notification prompt dispatched')
+    } catch (err) {
+      logger.warn({ err, code }, 'discord: failed to dispatch operator notification prompt')
     }
   }
 }

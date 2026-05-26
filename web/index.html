@@ -1307,6 +1307,20 @@
                 Discord-on jobb klikk a text csatornán &rarr; <strong>Copy Channel ID</strong> (Developer Mode bekapcsolva).
               </p>
             </div>
+            <!-- Discord-only: operator's own Discord user ID. Added to
+                 access.allowFrom so the bot can DM the operator with
+                 pairing-request notifications when a new sender DMs. -->
+            <div class="form-group" id="chDiscordOperatorIdGroup" hidden style="margin-bottom:16px;">
+              <label for="chDiscordOperatorId">Operator Discord user ID (DM értesítések ide)</label>
+              <div class="form-row" style="gap:8px; align-items:center;">
+                <input type="text" id="chDiscordOperatorId" placeholder="795733789556342794 (17-20 digit user snowflake)" style="flex:1;">
+                <button class="btn-secondary btn-compact" id="chDiscordOperatorIdSaveBtn" style="margin-top:0;">Save</button>
+              </div>
+              <p class="tg-pairing-info" style="margin-top:6px; font-size:12px;">
+                Discord-on engedelyezd a Developer Mode-ot, jobb klikk magadra &rarr; <strong>Copy User ID</strong>.
+                Új DM ide kapja a jóváhagyás link-et.
+              </p>
+            </div>
             <div class="tg-connected-info">
               <div class="tg-bot-badge">
                 <span class="tg-dot connected"></span>
