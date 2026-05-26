@@ -75,7 +75,6 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       channelProvider: CHANNEL_PROVIDER,
       hasTelegram: tg.hasTelegram,
       hasSlack: marveenChannelHasToken('slack'),
-      hasDiscord: marveenChannelHasToken('discord'),
       telegramBotUsername: tg.botUsername,
       role: 'main',
       personality: soulSection,
@@ -97,7 +96,10 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
   // interactive call we don't want to shell out from an HTTP handler).
   // Slack-specific managed-settings allowlist is also not enforced from
   // this path -- match the per-agent setup's behavior on the same gate.
-  const marveenChannelMatch = path.match(/^\/api\/marveen\/channels\/(telegram|slack|discord)$/)
+  // Discord is added only on the feature/windows+discord branch; the
+  // pure-Windows-port branch keeps the narrower set so the cast below is
+  // type-safe against `ChannelProviderType`.
+  const marveenChannelMatch = path.match(/^\/api\/marveen\/channels\/(telegram|slack)$/)
   if (marveenChannelMatch && method === 'POST') {
     const provider = marveenChannelMatch[1] as ChannelProviderType
     const body = await readBody(req)
