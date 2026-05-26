@@ -1022,6 +1022,7 @@ async function openMarveenDetail() {
     hasSlack: !!mFull.hasSlack,
     hasDiscord: !!mFull.hasDiscord,
     telegramBotUsername: mFull.telegramBotUsername,
+    discordChannelId: mFull.discordChannelId || '',
     running: true,
   })
 
@@ -1597,6 +1598,16 @@ function updateChannelTab(agent) {
     document.getElementById('chRunNotice').hidden = running
     document.getElementById('chRunningNotice').hidden = !running
   }
+  // Discord channel-id field: visible only on Marveen + discord provider.
+  // For sub-agents the channel ID isn't a Marveen-level concept, so leave
+  // the section hidden in that case.
+  const discordIdGroup = document.getElementById('chDiscordChannelIdGroup')
+  const discordIdInput = document.getElementById('chDiscordChannelId')
+  if (discordIdGroup && discordIdInput) {
+    const isMarveenDiscord = currentChannelProvider === 'discord' && agent.role === 'main'
+    discordIdGroup.hidden = !(connected && isMarveenDiscord)
+    if (isMarveenDiscord) discordIdInput.value = agent.discordChannelId || ''
+  }
   document.getElementById('chTokenInput').value = ''
   const slackInput = document.getElementById('chSlackAppToken')
   if (slackInput) slackInput.value = ''
@@ -1632,6 +1643,34 @@ async function refreshChannelHealth() {
     }
   } catch { /* ignore */ }
 }
+
+document.getElementById('chDiscordChannelIdSaveBtn').addEventListener('click', async () => {
+  const input = document.getElementById('chDiscordChannelId')
+  const id = input.value.trim()
+  if (!/^\d{17,20}$/.test(id)) {
+    showToast('Discord channel ID 17-20 jegyu szam kell legyen', true)
+    input.focus()
+    return
+  }
+  const btn = document.getElementById('chDiscordChannelIdSaveBtn')
+  btn.disabled = true
+  try {
+    const res = await fetch('/api/marveen/channels/discord/channel-id', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channelId: id }),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err.error || 'Mentes sikertelen')
+    }
+    showToast('Discord channel ID elmentve')
+  } catch (err) {
+    showToast(`Hiba: ${err.message}`, true)
+  } finally {
+    btn.disabled = false
+  }
+})
 
 document.getElementById('chProviderSelect').addEventListener('change', (e) => {
   currentChannelProvider = e.target.value

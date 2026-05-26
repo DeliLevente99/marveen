@@ -12,6 +12,20 @@ import { getProvider, channelStateDir, type ChannelProviderType } from '../../ch
 import { logger } from '../../logger.js'
 import type { RouteContext } from './types.js'
 
+// Read a single key from PROJECT_ROOT/.env. Returns the trimmed value or
+// empty string when missing. We bypass the in-process config.ts constants
+// because they cache the value at boot -- the dashboard needs to reflect
+// the latest filesystem state to render the channel-id field correctly
+// after a save.
+function readMainEnvVar(key: string): string {
+  const envPath = join(PROJECT_ROOT, '.env')
+  let content = ''
+  try { content = readFileOr(envPath, '') } catch { /* missing is fine */ }
+  const matchRe = new RegExp(`^${key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}=(.+)$`, 'm')
+  const m = content.match(matchRe)
+  return (m?.[1] ?? '').trim()
+}
+
 // Probe the global ~/.claude/channels/<provider>/.env for a token of the
 // given provider. Mirrors readMarveenTelegramConfig but is generic across
 // providers. Returns true iff the primary env-key has a non-empty value.
@@ -24,21 +38,21 @@ function marveenChannelHasToken(provider: ChannelProviderType): boolean {
   return !!m && !!m[1].trim()
 }
 
-// Rewrite (or insert) CHANNEL_PROVIDER in PROJECT_ROOT/.env. Operates on
-// the raw file rather than reloading the in-process `CHANNEL_PROVIDER`
-// constant (which is set at boot via src/config.ts) -- channels.sh /
-// main-channels-session.ts both re-read .env when spawning, so the next
-// restart picks up the new value.
-function setMainChannelProvider(provider: ChannelProviderType): void {
+// Rewrite (or insert) a key in PROJECT_ROOT/.env. Operates on the raw file
+// rather than touching in-process constants -- channels.sh / main-channels-
+// session.ts re-read .env when spawning, and ensureDiscordChannelGroup is
+// invoked alongside writes that need to take effect immediately.
+function setMainEnvVar(key: string, value: string): void {
   const envPath = join(PROJECT_ROOT, '.env')
   let content = ''
   try { content = readFileOr(envPath, '') } catch { /* missing is fine */ }
   const lines = content.split(/\r?\n/)
+  const matchRe = new RegExp(`^${key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}=`)
   let found = false
   const next: string[] = []
   for (const line of lines) {
-    if (/^CHANNEL_PROVIDER=/.test(line)) {
-      next.push(`CHANNEL_PROVIDER=${provider}`)
+    if (matchRe.test(line)) {
+      next.push(`${key}=${value}`)
       found = true
     } else {
       next.push(line)
@@ -47,7 +61,7 @@ function setMainChannelProvider(provider: ChannelProviderType): void {
   if (!found) {
     // Drop trailing empty line if present, then append + keep one trailing newline
     if (next.length > 0 && next[next.length - 1] === '') next.pop()
-    next.push(`CHANNEL_PROVIDER=${provider}`)
+    next.push(`${key}=${value}`)
     next.push('')
   }
   atomicWriteFileSync(envPath, next.join('\n'), { mode: 0o600 })
@@ -77,6 +91,7 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       hasSlack: marveenChannelHasToken('slack'),
       hasDiscord: marveenChannelHasToken('discord'),
       telegramBotUsername: tg.botUsername,
+      discordChannelId: readMainEnvVar('DISCORD_CHANNEL_ID'),
       role: 'main',
       personality: soulSection,
       claudeMd,
@@ -130,13 +145,50 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     // stays stale until restart, but channels.sh (POSIX) and main-channels-
     // session.ts (Windows) both re-read .env at spawn time so the next
     // session uses the new provider.
-    setMainChannelProvider(provider)
+    setMainEnvVar('CHANNEL_PROVIDER', provider)
 
     try { hardRestartMarveenChannels() } catch (err) {
       logger.warn({ err }, 'hardRestartMarveenChannels failed after Marveen channel setup; manual restart required')
     }
 
     json(res, { ok: true, provider, botName: validation.botName, restartRequired: true })
+    return true
+  }
+
+  // POST /api/marveen/channels/discord/channel-id -- write DISCORD_CHANNEL_ID
+  // into the project .env AND add it to access.groups so the plugin's
+  // outbound `reply` gate accepts the channel immediately, without a
+  // dashboard restart (the in-process CHANNEL_CHAT_ID constant is cached
+  // at boot via config.ts, so the bootstrap helper alone would need a
+  // restart). Boot-time bootstrap (ensureDiscordChannelGroup) still
+  // handles the cold-start case.
+  if (path === '/api/marveen/channels/discord/channel-id' && method === 'POST') {
+    const body = await readBody(req)
+    const { channelId } = JSON.parse(body.toString()) as { channelId?: string }
+    const trimmed = channelId?.trim() ?? ''
+    if (!trimmed) { json(res, { error: 'channelId is required' }, 400); return true }
+    if (!/^\d{17,20}$/.test(trimmed)) { json(res, { error: 'Discord channel ID must be a 17-20 digit snowflake' }, 400); return true }
+
+    setMainEnvVar('DISCORD_CHANNEL_ID', trimmed)
+
+    // Mirror ensureDiscordChannelGroup but with the freshly-supplied ID
+    // (no module reload needed). access.json may not exist yet -- seed it.
+    const stateDir = channelStateDir('discord')
+    mkdirSync(stateDir, { recursive: true })
+    const accessPath = join(stateDir, 'access.json')
+    let access: { dmPolicy?: string; allowFrom?: string[]; groups?: Record<string, unknown>; pending?: Record<string, unknown> } = {
+      dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {},
+    }
+    if (existsSync(accessPath)) {
+      try { access = JSON.parse(readFileOr(accessPath, '{}')) } catch { /* corrupt: start fresh */ }
+    }
+    access.groups = access.groups ?? {}
+    if (!(trimmed in access.groups)) {
+      access.groups[trimmed] = { requireMention: false, allowFrom: [] }
+      atomicWriteFileSync(accessPath, JSON.stringify(access, null, 2))
+    }
+
+    json(res, { ok: true, channelId: trimmed })
     return true
   }
 

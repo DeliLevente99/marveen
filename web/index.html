@@ -1293,6 +1293,20 @@
             </button>
           </div>
           <div id="chConnected" hidden>
+            <!-- Discord-only: target channel ID. Hidden for telegram/slack.
+                 Persisted to project .env (DISCORD_CHANNEL_ID) and the
+                 plugin's access.json groups so outbound `reply` works
+                 without a `/discord:access group add` step. -->
+            <div class="form-group" id="chDiscordChannelIdGroup" hidden style="margin-bottom:16px;">
+              <label for="chDiscordChannelId">Discord channel ID</label>
+              <div class="form-row" style="gap:8px; align-items:center;">
+                <input type="text" id="chDiscordChannelId" placeholder="1125829711784849408 (17-20 digit snowflake)" style="flex:1;">
+                <button class="btn-secondary btn-compact" id="chDiscordChannelIdSaveBtn" style="margin-top:0;">Save</button>
+              </div>
+              <p class="tg-pairing-info" style="margin-top:6px; font-size:12px;">
+                Discord-on jobb klikk a text csatornán &rarr; <strong>Copy Channel ID</strong> (Developer Mode bekapcsolva).
+              </p>
+            </div>
             <div class="tg-connected-info">
               <div class="tg-bot-badge">
                 <span class="tg-dot connected"></span>
