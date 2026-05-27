@@ -197,10 +197,14 @@ function resumeMarveenSession(): boolean {
     const claudeCmd = [
       'export PATH="/opt/homebrew/bin:$HOME/.bun/bin:/home/linuxbrew/.linuxbrew/bin:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
       '&&', CLAUDE, '--continue', '--dangerously-skip-permissions',
-      // Discord plugin is not on the org-approved channels allowlist.
-      // Flag REQUIRES a tagged entry -- bare flag exits 1 with
-      // "entries must be tagged". Telegram + Slack don't need this.
-      ...(provider.type === 'discord' ? [`--dangerously-load-development-channels plugin:${provider.pluginId}`] : []),
+      // NOTE: inbound from `--channels` goes through a separate
+      // allowlist at /etc/claude-code/managed-settings.json
+      // (allowedChannelPlugins). If the plugin isn't listed there,
+      // claude-code 2.1.152+ silently drops MCP notifications even
+      // with --dangerously-skip-permissions. The dev-channels flag
+      // does NOT bypass this -- you must edit managed-settings.json
+      // (root) to add the plugin. See scripts/channels.sh for the
+      // full root-cause note.
       `--channels plugin:${provider.pluginId}`,
     ].join(' ')
     execFileSync(TMUX, ['respawn-pane', '-k', '-t', MAIN_CHANNELS_SESSION, claudeCmd], { timeout: 15000 })

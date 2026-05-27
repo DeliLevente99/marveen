@@ -43,14 +43,18 @@ case "$CHANNEL_PROVIDER" in
   *)        PLUGIN_ID="telegram@claude-plugins-official" ;;
 esac
 
-# Discord plugin is not on Claude Code's org-approved channels list, so
-# `--channels plugin:discord@...` makes the plugin's MCP server fail at
-# start ("1 MCP server failed" in the pane footer). The dev-channels flag
-# bypasses the allowlist, but REQUIRES a tagged entry -- bare flag exits 1
-# with "entries must be tagged". Telegram + Slack are on the default
-# allowlist and don't need this.
-DEVCHANNELS_FLAG=""
-[ "$CHANNEL_PROVIDER" = "discord" ] && DEVCHANNELS_FLAG="--dangerously-load-development-channels plugin:${PLUGIN_ID}"
+# ROOT-CAUSE NOTE (kali-linux WSL, claude-code 2.1.152, 2026-05-27):
+# Inbound MCP notifications from the `--channels` plugin go through a SECOND
+# gate beyond --dangerously-skip-permissions / --dangerously-load-development-
+# channels: claude-code checks `/etc/claude-code/managed-settings.json`
+# allowedChannelPlugins and SILENTLY DROPS notifications from any plugin not
+# in that list. The plugin still sends the MCP notification successfully
+# (confirmed by debug-logging the plugin), but the session never ingests it.
+# Symptom: bot online, plugin debug shows "MCP notification SENT successfully",
+# but claude pane shows no <channel source="..."> inbound and the bot never
+# replies. Fix is to add the plugin to managed-settings.json (requires sudo).
+# Once that's done, the dev-channels flag is unnecessary -- this is why
+# the earlier DEVCHANNELS_FLAG block was removed.
 
 # Extra safety net for existing installs whose tmux server already has a
 # polluted global env -- scrub channel tokens so new child sessions don't
@@ -78,7 +82,7 @@ $TMUX kill-session -t "$SESSION" 2>/dev/null
 # resuming one of those loses the --channels activation state, causing
 # "Channel notifications skipped: server not in --channels list" errors.
 $TMUX new-session -d -s "$SESSION" -c "$INSTALL_DIR" \
-  "$CLAUDE --dangerously-skip-permissions $DEVCHANNELS_FLAG --channels plugin:${PLUGIN_ID}"
+  "$CLAUDE --dangerously-skip-permissions --channels plugin:${PLUGIN_ID}"
 
 # Session startup guard: a Claude Code first-run dialogusait auto-accept-eljuk
 # kulonben a headless session orokre parkolna a prompton es a Telegram plugin
@@ -92,11 +96,6 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
   sleep 1
   pane=$($TMUX capture-pane -t "$SESSION" -p 2>/dev/null || true)
   case "$pane" in
-    *"Loading development channels"*"I am using this for local development"*)
-      $TMUX send-keys -t "$SESSION" "1" Enter
-      sleep 1
-      continue
-      ;;
     *"Bypass Permissions mode"*"Yes, I accept"*)
       $TMUX send-keys -t "$SESSION" "2" Enter
       sleep 1
