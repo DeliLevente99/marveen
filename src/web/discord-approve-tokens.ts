@@ -16,6 +16,8 @@ export interface ApproveTokenEntry {
   code: string       // pending entry code in access.json
   senderId: string   // Discord user ID being approved
   expiresAt: number  // ms epoch
+  agentName: string  // which agent's access.json this pending lives in
+                     // (MAIN_AGENT_ID for the main agent, or sub-agent slug)
 }
 
 const TOKEN_TTL_MS = 5 * 60 * 1000
@@ -27,15 +29,15 @@ function pruneExpired(now = Date.now()): void {
   }
 }
 
-export function mintApproveToken(code: string, senderId: string): string {
+export function mintApproveToken(code: string, senderId: string, agentName: string): string {
   pruneExpired()
   // 24 bytes base64url -> 32 chars -- unguessable. URL-safe.
   const token = randomBytes(24).toString('base64url')
   const expiresAt = Date.now() + TOKEN_TTL_MS
-  store.set(token, { code, senderId, expiresAt })
+  store.set(token, { code, senderId, expiresAt, agentName })
   if (process.env.DISCORD_APPROVE_TOKEN_DEBUG === '1') {
     // eslint-disable-next-line no-console
-    console.error(`[discord-approve-tokens] minted token=${token.slice(0, 8)}... code=${code} expiresAt=${new Date(expiresAt).toISOString()} storeSize=${store.size}`)
+    console.error(`[discord-approve-tokens] minted token=${token.slice(0, 8)}... code=${code} agent=${agentName} expiresAt=${new Date(expiresAt).toISOString()} storeSize=${store.size}`)
   }
   return token
 }

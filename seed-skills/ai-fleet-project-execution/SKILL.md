@@ -5,6 +5,21 @@ description: AI fleet project execution (orchestrator=PM, marketing agent, backe
 
 # AI Fleet Project Execution
 
+## Marveen dashboard hozzáférés (kanban + agent API)
+
+Az ágensek cwd-je `agents/<név>/`, NEM a Marveen project gyökere. A `store/`
+és `~/.claude/` path-okat NE relatívan írd, hanem a `$MARVEEN_PROJECT_ROOT`
+env változón keresztül (a dashboard ezt minden spawn-kor beállítja az
+abszolút path-ra). Konkrét minták:
+
+- Dashboard token: `cat "$MARVEEN_PROJECT_ROOT/store/.dashboard-token"`
+- SQLite DB (kanban olvasás-írás): `sqlite3 "$MARVEEN_PROJECT_ROOT/store/claudeclaw.db" ...`
+- HTTP API kérés mindig az `http://localhost:3420/...` URL-re, Bearer auth
+  a fenti tokennel.
+
+A relatív `store/...` path-ok az ágens cwd-jéből HIBÁSAK -- ne másold ki
+kontextus nélkül.
+
 ## Mikor használd
 
 A user átad egy projektet "csapatként vigyétek végig önállóan" instrukcióval. Triggerek:
@@ -172,7 +187,7 @@ Ezért a deploy-blokkerek mindig a userre várnak. Mitigation:
 
 **Sub-agent restart via dashboard API**:
 1. `tmux kill-session -t agent-<name>` (megöli a stuck session-t)
-2. `curl -s -X POST http://localhost:3420/api/agents/<name>/start -H "Authorization: Bearer $(cat store/.dashboard-token)"` → `{"ok":true}` válasz
+2. `curl -s -X POST http://localhost:3420/api/agents/<name>/start -H "Authorization: Bearer $(cat "$MARVEEN_PROJECT_ROOT/store/.dashboard-token")"` → `{"ok":true}` válasz
 3. Verify: `tmux ls | grep agent-<name>` → új session friss "created"-dátummal
 4. `ps -o pid,etime,command -p <pid>` → `claude --continue --dangerously-skip-permissions --model <model> --channels plugin:telegram@claude-plugins-official` fut, "continue" mode betölti az utolsó session state-jét
 5. Verify-ping: inter-agent message a `/api/messages`-en, várd a választ ~30-60s alatt
@@ -187,7 +202,7 @@ Megjegyzés: a `POST /api/agents/<name>/restart` NEM létezik (404 Not Found). K
 
 - **5-10 percenként polling a delegált feladatra, NE várj passzívan visszajelzésre** (a user explicit szabálya): a child-agent NEM küld auto-completion-ping-et (lásd lentebb), tehát a coordinator-szerep proaktív polling. Pattern: amikor delegálsz inter-agent message-tel, indíts mentális számlálót, és **legalább 5-10 percenként** ellenőrizd: (1) `curl /api/messages?agent=<orchestrator-agent-id>` -> message status delivered/failed, (2) `tmux capture-pane -t agent-X -p | tail -30` -> mit csinál épp, (3) `gh pr list --repo <owner>/<repo>` + `sqlite3 ... kanban_cards WHERE assignee='X'` -> haladás. Ha 30 percig se mozdul → re-dispatch / állapot-debug. Ha 1.5+ órát vársz passzívan, már TÚL KÉSŐ: a child agent el is akadhat (busy másik feladaton, permission-modal, abandoned).
 
-- **`Abandoned: target session never ready within retry window` inter-agent message status**: ha egy delegált task-ról órákig nincs visszhang (NINCS PR, NINCS kanban-update, NINCS inter-agent ping), ELŐSZÖR ellenőrizd a message status-t: `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" "http://localhost:3420/api/messages?agent=<orchestrator-agent-id>"` és szűrd a `status` + `result` mezőket. Ha `status=failed` és `result="Abandoned: target session never ready within retry window"` → a child agent session NEM volt ready a delivery pillanatában (busy / restart / first-run dialog parkolás). **Recovery**: (1) `curl /api/agents` ellenőrzés hogy fut-e most (`running=True`), (2) ha igen → `curl POST /api/messages` re-dispatch ugyanazzal a tartalommal (új ID, frissen próbálkozik), (3) ha nem fut → tmux-attach + session-restart kell ELŐSZÖR. Tanulság: a `/api/messages` POST visszaadja `pending` státuszt, de a delivery NEM garantált -- a coordinator-ciklus feladata 30-60 perc múlva ellenőrizni a `failed` státuszú abandon-okat.
+- **`Abandoned: target session never ready within retry window` inter-agent message status**: ha egy delegált task-ról órákig nincs visszhang (NINCS PR, NINCS kanban-update, NINCS inter-agent ping), ELŐSZÖR ellenőrizd a message status-t: `curl -s -H "Authorization: Bearer $(cat "$MARVEEN_PROJECT_ROOT/store/.dashboard-token")" "http://localhost:3420/api/messages?agent=<orchestrator-agent-id>"` és szűrd a `status` + `result` mezőket. Ha `status=failed` és `result="Abandoned: target session never ready within retry window"` → a child agent session NEM volt ready a delivery pillanatában (busy / restart / first-run dialog parkolás). **Recovery**: (1) `curl /api/agents` ellenőrzés hogy fut-e most (`running=True`), (2) ha igen → `curl POST /api/messages` re-dispatch ugyanazzal a tartalommal (új ID, frissen próbálkozik), (3) ha nem fut → tmux-attach + session-restart kell ELŐSZÖR. Tanulság: a `/api/messages` POST visszaadja `pending` státuszt, de a delivery NEM garantált -- a coordinator-ciklus feladata 30-60 perc múlva ellenőrizni a `failed` státuszú abandon-okat.
 
 - **Inter-agent completion-ping NEM auto-pattern**: az ágensek NEM küldenek auto-completion-msg-t az orchestratornak amikor egy task-ot lezárnak, csak a saját tmux pane-jükbe írják ki "kész"-t. Az orchestrator NEM olvassa a pane-jüket folyamatosan -> a coordinator-ciklus megakad. Mitigation: agent CLAUDE.md-jébe írj egy explicit "Feladat befejezése: KÖTELEZŐ inter-agent ping az orchestratornak" szakaszt curl-példával + magyarázattal. A CLAUDE.md auto-merge a context-be agent-restart-kor, és attól a pillanattól a szabály effektív.
 

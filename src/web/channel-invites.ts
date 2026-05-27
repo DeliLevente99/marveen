@@ -35,7 +35,7 @@ import { logger } from '../logger.js'
 import { channelStateDir, readChannelToken, type ChannelProviderType } from '../channel-provider.js'
 import { agentDir } from './agent-config.js'
 import { atomicWriteFileSync } from './atomic-write.js'
-import { WEB_PORT, WEB_HOST, PROJECT_ROOT } from '../config.js'
+import { WEB_PORT, WEB_HOST, PROJECT_ROOT, MAIN_AGENT_ID } from '../config.js'
 import { loadOrCreateDashboardToken } from './dashboard-auth.js'
 import { mintApproveToken } from './discord-approve-tokens.js'
 
@@ -259,7 +259,7 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
       // invokes the discord plugin's reply tool to actually deliver the
       // DM. We track already-notified codes in-memory to avoid spamming
       // claude on every 3s tick.
-      if (provider === 'discord' && name === mainAgentId) {
+      if (provider === 'discord') {
         // Re-read .env each tick instead of importing the boot-cached
         // constant: the operator typically saves OPERATOR_DISCORD_USER_ID
         // via the dashboard UI AFTER the dashboard has booted, so the
@@ -267,8 +267,12 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
         // /api/marveen/channels/discord/operator-id endpoint writes the
         // .env directly. (The cached const would force a dashboard
         // restart after every operator-id change.)
+        // Notify for every Discord-configured agent's pending entries
+        // (main + sub-agents). The same operator owns all of them; the
+        // approve token carries the agent name so the approve endpoint
+        // mutates the correct per-agent access.json.
         const operatorId = readOperatorDiscordUserId()
-        if (operatorId) notifyDiscordPendingsToOperator(accessPath, pendingEntries, operatorId)
+        if (operatorId) notifyDiscordPendingsToOperator(accessPath, pendingEntries, operatorId, name)
       }
     }
   }
@@ -283,6 +287,7 @@ function notifyDiscordPendingsToOperator(
   accessPath: string,
   pendingEntries: Array<[string, { senderId: string; chatId: string; createdAt: number; expiresAt: number; groupChannelId?: string }]>,
   operatorId: string,
+  agentName: string,
 ): void {
   let notified = notifiedOperatorCodes.get(accessPath)
   if (!notified) {
@@ -294,12 +299,16 @@ function notifyDiscordPendingsToOperator(
     // Skip if the sender IS the operator (don't DM yourself).
     if (entry.senderId === operatorId) continue
     const dashboardToken = (() => { try { return loadOrCreateDashboardToken() } catch { return '' } })()
-    const approveToken = mintApproveToken(code, entry.senderId)
+    const approveToken = mintApproveToken(code, entry.senderId, agentName)
     const url = `http://${WEB_HOST}:${WEB_PORT}/?token=${dashboardToken}&approve_token=${approveToken}`
     const context = entry.groupChannelId
       ? `szerver csatorna <#${entry.groupChannelId}>`
       : 'DM'
-    const text = `Új ${context} kéri user@${entry.senderId} (code: ${code}). Jóváhagyás (5 perc): ${url}`
+    // For sub-agents the operator needs to know WHICH bot got the
+    // request -- "Marveen-en" vs "discord-asszisztens-en". Main agent
+    // notifications stay terse (we omit the redundant agent label).
+    const target = agentName === MAIN_AGENT_ID ? '' : ` (${agentName})`
+    const text = `Új ${context} kéri user@${entry.senderId}${target} (code: ${code}). Jóváhagyás (5 perc): ${url}`
     // Fire-and-forget so a Discord API stall doesn't block the tick.
     // notified.add stays in the promise chain so a failed call retries
     // on the next 3s tick.

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join, delimiter as PATH_DELIMITER } from 'node:path'
 import { homedir } from 'node:os'
 import { execFileSync } from 'node:child_process'
-import { OLLAMA_URL } from '../config.js'
+import { OLLAMA_URL, PROJECT_ROOT } from '../config.js'
 import { logger } from '../logger.js'
 import {
   detectPaneState,
@@ -83,6 +83,12 @@ function buildAgentEnv(opts: {
   if (opts.agentProvider === 'slack') {
     env.SLACK_AUDIT_LOG = join(opts.agentChannelDir, 'audit.jsonl')
   }
+  // Absolute path to Marveen's project root, so skills/templates can
+  // reference dashboard-state files (store/.dashboard-token, store/
+  // claudeclaw.db, etc.) without assuming the agent's cwd is the
+  // project root. Skills should `${MARVEEN_PROJECT_ROOT}/store/...`
+  // rather than `store/...` -- agents run with cwd=agents/<name>/.
+  env.MARVEEN_PROJECT_ROOT = PROJECT_ROOT
   if (opts.claudeConfigDir) env.CLAUDE_CONFIG_DIR = opts.claudeConfigDir
   if (opts.isOllama) {
     env.ANTHROPIC_AUTH_TOKEN = 'ollama'
@@ -176,11 +182,16 @@ export function startAgentProcess(name: string): { ok: boolean; pid?: number; er
     claudeArgs.push('--model', model)
     claudeArgs.push('--channels', `plugin:${provider.pluginId}`)
 
+    // On Windows, `claude` is installed as a .cmd script so node-pty
+    // can't spawn it directly (error code 2). Wrap it via cmd.exe.
+    const sessionCommand = process.platform === 'win32' ? 'cmd.exe' : 'claude'
+    const sessionArgs = process.platform === 'win32' ? ['/c', 'claude', ...claudeArgs] : claudeArgs
+
     agentRuntime.startSession({
       name: session,
       cwd: dir,
-      command: 'claude',
-      args: claudeArgs,
+      command: sessionCommand,
+      args: sessionArgs,
       env,
       // Defense in depth on POSIX: even though buildAgentEnv already
       // `delete`-d these keys from `env`, a long-running tmux server may

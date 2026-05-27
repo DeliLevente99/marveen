@@ -491,7 +491,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
     if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
 
     const body = await readBody(req)
-    const { botToken, appToken } = JSON.parse(body.toString()) as { botToken: string; appToken?: string }
+    const { botToken, appToken, channelId } = JSON.parse(body.toString()) as { botToken: string; appToken?: string; channelId?: string }
     if (!botToken?.trim()) { json(res, { error: 'botToken is required' }, 400); return true }
 
     const channelProvider = getProvider(provider)
@@ -511,8 +511,13 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
 
     const stateDir = channelStateDir(provider, agentDir(name))
     mkdirSync(stateDir, { recursive: true })
-    const tokenKey = provider === 'slack' ? 'SLACK_BOT_TOKEN' : 'TELEGRAM_BOT_TOKEN'
+    const tokenKey = provider === 'slack' ? 'SLACK_BOT_TOKEN'
+      : provider === 'discord' ? 'DISCORD_BOT_TOKEN'
+      : 'TELEGRAM_BOT_TOKEN'
     let envContent = `${tokenKey}=${botToken.trim()}\n`
+    if (provider === 'discord' && channelId?.trim()) {
+      envContent += `DISCORD_CHANNEL_ID=${channelId.trim()}\n`
+    }
     if (provider === 'slack' && appToken?.trim()) {
       envContent += `SLACK_APP_TOKEN=${appToken.trim()}\n`
     }

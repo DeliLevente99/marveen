@@ -46,7 +46,11 @@ function buildMainChannelsEnv(): Record<string, string> {
   // The main agent's channel state lives in the project-root .claude
   // dir (not under per-agent agents/<name>/.claude). channelStateDir()
   // without an agentDir argument returns the main-agent path.
-  const stateEnvVar = CHANNEL_PROVIDER === 'slack' ? 'SLACK_STATE_DIR' : 'TELEGRAM_STATE_DIR'
+  const stateEnvVar = CHANNEL_PROVIDER === 'slack'
+    ? 'SLACK_STATE_DIR'
+    : CHANNEL_PROVIDER === 'discord'
+      ? 'DISCORD_STATE_DIR'
+      : 'TELEGRAM_STATE_DIR'
   env[stateEnvVar] = channelStateDir(CHANNEL_PROVIDER)
   return env
 }
@@ -85,7 +89,7 @@ function flattenPane(pane: string): string {
 // not exist.
 function autoAcceptStartupDialogs(session: SessionName): void {
   const MAX_ATTEMPTS = 15 // ~15s wallclock; ConPTY-on-WSL paint can be slow
-  let devChannelsHandled = false
+  // let devChannelsHandled = false  // kikommentelve 2026-05-27 (lásd lentebb)
   let trustHandled = false
   let bypassHandled = false
   let attempt = 0
@@ -96,7 +100,7 @@ function autoAcceptStartupDialogs(session: SessionName): void {
       return
     }
     if (attempt > MAX_ATTEMPTS) {
-      logger.warn({ session, devChannelsHandled, trustHandled, bypassHandled }, 'Channels session startup-dialog timeout (plugin may not have loaded)')
+      logger.warn({ session, trustHandled, bypassHandled }, 'Channels session startup-dialog timeout (plugin may not have loaded)')
       return
     }
     const pane = agentRuntime.capture(session)
@@ -108,17 +112,20 @@ function autoAcceptStartupDialogs(session: SessionName): void {
     // dev-channels warning fires FIRST when --dangerously-load-development-
     // channels is passed (Discord path). Option 1 = "I am using this for
     // local development". Must be matched ahead of the other dialogs.
-    if (!devChannelsHandled && /Loadingdevelopmentchannels|Iamusingthisforlocal/i.test(flat)) {
-      devChannelsHandled = true
-      logger.info({ session }, 'Channels session: dev-channels warning detected, auto-accepting (1+Enter)')
-      try {
-        agentRuntime.sendKey(session, '1')
-        agentRuntime.sleepSync(100)
-        agentRuntime.sendKey(session, 'Enter')
-      } catch (err) {
-        logger.warn({ err, session }, 'Failed to send keys for dev-channels auto-accept')
-      }
-    } else if (!trustHandled && /Doyoutrust|Isthisaproject|Itrust|trustthisfolder/i.test(flat)) {
+    // KIKOMMENTELVE 2026-05-27: a flag-et eltávolítottuk (lásd args
+    // körül a kommentet), így ez a prompt nem ugrik fel.
+    // if (!devChannelsHandled && /Loadingdevelopmentchannels|Iamusingthisforlocal/i.test(flat)) {
+    //   devChannelsHandled = true
+    //   logger.info({ session }, 'Channels session: dev-channels warning detected, auto-accepting (1+Enter)')
+    //   try {
+    //     agentRuntime.sendKey(session, '1')
+    //     agentRuntime.sleepSync(100)
+    //     agentRuntime.sendKey(session, 'Enter')
+    //   } catch (err) {
+    //     logger.warn({ err, session }, 'Failed to send keys for dev-channels auto-accept')
+    //   }
+    // } else
+    if (!trustHandled && /Doyoutrust|Isthisaproject|Itrust|trustthisfolder/i.test(flat)) {
       trustHandled = true
       logger.info({ session }, 'Channels session: trust dialog detected, auto-accepting (1+Enter)')
       try {
@@ -160,10 +167,13 @@ export function startMainChannelsSession(): void {
   const env = buildMainChannelsEnv()
   const args = [
     '--dangerously-skip-permissions',
-    // Discord plugin is not on Claude's org-approved allowlist; this flag
-    // takes a TAGGED entry (`plugin:<id>@<marketplace>` or `server:<id>`)
-    // and bypasses the allowlist check for that specific entry only.
-    ...(CHANNEL_PROVIDER === 'discord' ? ['--dangerously-load-development-channels', `plugin:${provider.pluginId}`] : []),
+    // NOTE: korábban kellett `--dangerously-load-development-channels
+    // plugin:<id>@<marketplace>` mert a discord plugin nincs az
+    // org-approved allowlistán. Az agent-process.ts (PID 15120-as
+    // discord-asszisztens) bizonyította, hogy a flag nélkül is működik
+    // (üzenetváltás sikeres 2026-05-27). Kikommentelve; ha a plugin
+    // betöltése visszaesik, vissza kell tenni.
+    // ...(CHANNEL_PROVIDER === 'discord' ? ['--dangerously-load-development-channels', `plugin:${provider.pluginId}`] : []),
     '--model', 'claude-sonnet-4-6',
     '--channels', `plugin:${provider.pluginId}`,
   ]

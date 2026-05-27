@@ -1,10 +1,10 @@
 import { existsSync, unlinkSync, copyFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { homedir } from 'node:os'
-import { PROJECT_ROOT, OWNER_NAME, BOT_NAME, CHANNEL_PROVIDER } from '../../config.js'
+import { PROJECT_ROOT, OWNER_NAME, BOT_NAME, CHANNEL_PROVIDER, MAIN_AGENT_ID } from '../../config.js'
 import { readMarveenTelegramConfig, sendMarveenAvatarChange } from '../telegram.js'
 import { hardRestartMarveenChannels } from '../channel-monitor.js'
-import { readFileOr } from '../agent-config.js'
+import { agentDir, readFileOr } from '../agent-config.js'
 import { parseMultipart } from '../multipart.js'
 import { readBody, json, serveFile } from '../http-helpers.js'
 import { atomicWriteFileSync } from '../atomic-write.js'
@@ -181,7 +181,12 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     const entry = consumeApproveToken(token)
     if (!entry) { json(res, { error: 'token unknown or expired' }, 404); return true }
 
-    const stateDir = channelStateDir('discord')
+    // Per-agent access.json: the token carries the agent name so we
+    // mutate the right file. Main agent uses ~/.claude/channels/discord/,
+    // sub-agents use agents/<name>/.claude/channels/discord/.
+    const stateDir = entry.agentName === MAIN_AGENT_ID
+      ? channelStateDir('discord')
+      : channelStateDir('discord', agentDir(entry.agentName))
     const accessPath = join(stateDir, 'access.json')
     if (!existsSync(accessPath)) { json(res, { error: 'discord access.json missing' }, 500); return true }
     let access: { dmPolicy?: string; allowFrom?: string[]; groups?: Record<string, { requireMention?: boolean; allowFrom?: string[] } | Record<string, unknown>>; pending?: Record<string, { senderId: string; chatId: string; createdAt: number; expiresAt: number; replies?: number; groupChannelId?: string }> }
@@ -209,8 +214,8 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
       access.groups = access.groups ?? {}
       const existing = access.groups[pending.groupChannelId] as { requireMention?: boolean; allowFrom?: string[] } | undefined
       const groupEntry = (existing && typeof existing === 'object')
-        ? { requireMention: existing.requireMention ?? false, allowFrom: Array.isArray(existing.allowFrom) ? [...existing.allowFrom] : [] }
-        : { requireMention: false, allowFrom: [] }
+        ? { requireMention: existing.requireMention ?? true, allowFrom: Array.isArray(existing.allowFrom) ? [...existing.allowFrom] : [] }
+        : { requireMention: true, allowFrom: [] }
       if (!groupEntry.allowFrom.includes(pending.senderId)) groupEntry.allowFrom.push(pending.senderId)
       access.groups[pending.groupChannelId] = groupEntry
     } else {
@@ -309,7 +314,7 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
     }
     access.groups = access.groups ?? {}
     if (!(trimmed in access.groups)) {
-      access.groups[trimmed] = { requireMention: false, allowFrom: [] }
+      access.groups[trimmed] = { requireMention: true, allowFrom: [] }
       atomicWriteFileSync(accessPath, JSON.stringify(access, null, 2))
     }
 

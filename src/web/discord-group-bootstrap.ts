@@ -55,7 +55,7 @@ export function ensureDiscordChannelGroup(): void {
   access.groups = access.groups ?? {}
   if (CHANNEL_CHAT_ID in access.groups) return
 
-  access.groups[CHANNEL_CHAT_ID] = { requireMention: false, allowFrom: [] }
+  access.groups[CHANNEL_CHAT_ID] = { requireMention: true, allowFrom: [] }
   mkdirSync(dir, { recursive: true })
   atomicWriteFileSync(path, JSON.stringify(access, null, 2))
   logger.info({ channelId: CHANNEL_CHAT_ID }, 'discord-group-bootstrap: added channel to access.groups')
