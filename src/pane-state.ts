@@ -167,7 +167,7 @@ export function detectPaneState(
   // Scan UPWARDS from the footer so we stay inside the live box and
   // don't pick up historical ❯ lines from scrollback.
   const lines = pane.split('\n')
-  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerIdx = lines.findLastIndex(l => IDLE_FOOTER_RX.test(l))
   if (footerIdx >= 0) {
     let bottomSep = -1
     for (let i = footerIdx - 1; i >= 0; i--) {
@@ -212,7 +212,7 @@ export function isReadyForPrompt(pane: string): boolean {
 // states should remain conservative.
 function busyScanRegion(pane: string): string {
   const lines = pane.split('\n')
-  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerIdx = lines.findLastIndex(l => IDLE_FOOTER_RX.test(l))
   if (footerIdx < 0) return pane
   let bottomSep = -1
   for (let i = footerIdx - 1; i >= 0; i--) {
@@ -224,9 +224,19 @@ function busyScanRegion(pane: string): string {
     if (BOX_SEP_RX.test(lines[i])) { topSep = i; break }
   }
   if (topSep < 0) return pane
-  // Concatenate output-above + status-below, dropping the input box
-  // interior between topSep and bottomSep (exclusive on both ends).
-  const above = lines.slice(0, topSep + 1)
+  // Anchor the "output above" upper edge to the previous footer in
+  // scrollback (if any). That footer is the bottom edge of the prior
+  // turn -- anything above it belongs to older turns and the
+  // "esc to interrupt" / tokens-arrow scrollback there must NOT count
+  // toward current-turn liveness. Pre-fix, long-running sessions
+  // accumulated several past footers in scrollback and the BUSY scan
+  // tripped on every one of them, freezing the router perpetually.
+  let prevFooter = -1
+  for (let i = topSep - 1; i >= 0; i--) {
+    if (IDLE_FOOTER_RX.test(lines[i])) { prevFooter = i; break }
+  }
+  const outputStart = prevFooter + 1
+  const above = lines.slice(outputStart, topSep + 1)
   const below = lines.slice(bottomSep)
   return [...above, ...below].join('\n')
 }
@@ -241,7 +251,7 @@ function busyScanRegion(pane: string): string {
 // "not enough signal to act, do nothing".
 function liveInputBox(pane: string): string | null {
   const lines = pane.split('\n')
-  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  const footerIdx = lines.findLastIndex(l => IDLE_FOOTER_RX.test(l))
   if (footerIdx < 0) return null
   let bottomSep = -1
   for (let i = footerIdx - 1; i >= 0; i--) {

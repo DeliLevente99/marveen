@@ -119,6 +119,39 @@ const IDLE_CONPTY_COLLAPSED_FOOTER = [
   '  ⏵⏵bypasspermissionson (shift+tabtocycle)·←foragents◉xhigh·/effort',
 ].join('\n')
 
+// Long-running sessions accumulate multiple turn footers in scrollback.
+// Pre-fix, `findIndex(IDLE_FOOTER_RX)` returned the FIRST occurrence
+// (top of scrollback) and the input-box bounds were computed around an
+// old turn's separators -- but BUSY_INDICATORS scanned the area ABOVE
+// that misidentified topSep, which still contained recent "esc to
+// interrupt" footers from later (also-completed) turns. Result: every
+// long-running session got perpetually classified as busy, even when
+// genuinely idle. The fix uses `findLastIndex` so the input-box
+// resolution anchors to the most recent footer (the actual live
+// status), and the BUSY scan region tracks the current turn cleanly.
+const IDLE_AFTER_MANY_TURNS_SCROLLBACK = [
+  // Old turn 1 -- footer with "esc to interrupt" baked into scrollback.
+  '  Some old output',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt',
+  '',
+  // Old turn 2.
+  '  Reply from turn 2',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt',
+  '',
+  // Current live state: idle, no spinner, no esc-to-interrupt.
+  '  Reply from last turn',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 const TYPING_PARKED = [
   '',
   SEP,
@@ -333,6 +366,16 @@ describe('detectPaneState', () => {
     // identifier words. Pre-fix, IDLE_FOOTER_RX required literal spaces and
     // returned 'unknown' on every Windows session, freezing the router.
     expect(detectPaneState(IDLE_CONPTY_COLLAPSED_FOOTER)).toBe('idle')
+  })
+
+  it('ignores stale esc-to-interrupt footers in scrollback when current footer is idle', () => {
+    // Past turns leave fully-rendered footers (with `esc to interrupt`)
+    // baked into the scrollback buffer. The live status is whatever the
+    // BOTTOMMOST footer reports. Pre-fix, footer lookup used findIndex
+    // (first match), anchored input-box bounds around old separators,
+    // and the BUSY scan above that point still saw later scrollback
+    // footers -> every long session classified as 'busy' forever.
+    expect(detectPaneState(IDLE_AFTER_MANY_TURNS_SCROLLBACK)).toBe('idle')
   })
 
   it('detects typing when text is parked in the input box', () => {
