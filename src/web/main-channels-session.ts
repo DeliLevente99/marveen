@@ -89,7 +89,6 @@ function flattenPane(pane: string): string {
 // not exist.
 function autoAcceptStartupDialogs(session: SessionName): void {
   const MAX_ATTEMPTS = 15 // ~15s wallclock; ConPTY-on-WSL paint can be slow
-  // let devChannelsHandled = false  // kikommentelve 2026-05-27 (lásd lentebb)
   let trustHandled = false
   let bypassHandled = false
   let attempt = 0
@@ -109,22 +108,6 @@ function autoAcceptStartupDialogs(session: SessionName): void {
       logger.info({ session, attempt }, 'Channels session plugin loaded')
       return
     }
-    // dev-channels warning fires FIRST when --dangerously-load-development-
-    // channels is passed (Discord path). Option 1 = "I am using this for
-    // local development". Must be matched ahead of the other dialogs.
-    // KIKOMMENTELVE 2026-05-27: a flag-et eltávolítottuk (lásd args
-    // körül a kommentet), így ez a prompt nem ugrik fel.
-    // if (!devChannelsHandled && /Loadingdevelopmentchannels|Iamusingthisforlocal/i.test(flat)) {
-    //   devChannelsHandled = true
-    //   logger.info({ session }, 'Channels session: dev-channels warning detected, auto-accepting (1+Enter)')
-    //   try {
-    //     agentRuntime.sendKey(session, '1')
-    //     agentRuntime.sleepSync(100)
-    //     agentRuntime.sendKey(session, 'Enter')
-    //   } catch (err) {
-    //     logger.warn({ err, session }, 'Failed to send keys for dev-channels auto-accept')
-    //   }
-    // } else
     if (!trustHandled && /Doyoutrust|Isthisaproject|Itrust|trustthisfolder/i.test(flat)) {
       trustHandled = true
       logger.info({ session }, 'Channels session: trust dialog detected, auto-accepting (1+Enter)')
@@ -167,13 +150,6 @@ export function startMainChannelsSession(): void {
   const env = buildMainChannelsEnv()
   const args = [
     '--dangerously-skip-permissions',
-    // NOTE: korábban kellett `--dangerously-load-development-channels
-    // plugin:<id>@<marketplace>` mert a discord plugin nincs az
-    // org-approved allowlistán. Az agent-process.ts (PID 15120-as
-    // discord-asszisztens) bizonyította, hogy a flag nélkül is működik
-    // (üzenetváltás sikeres 2026-05-27). Kikommentelve; ha a plugin
-    // betöltése visszaesik, vissza kell tenni.
-    // ...(CHANNEL_PROVIDER === 'discord' ? ['--dangerously-load-development-channels', `plugin:${provider.pluginId}`] : []),
     '--model', 'claude-sonnet-4-6',
     '--channels', `plugin:${provider.pluginId}`,
   ]
