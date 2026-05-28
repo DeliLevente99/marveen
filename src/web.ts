@@ -30,6 +30,7 @@ import { tryHandleAgentsSkills } from './web/routes/agents-skills.js'
 import { tryHandleSkills } from './web/routes/skills.js'
 import { tryHandleAgents } from './web/routes/agents.js'
 import { tryHandleAgentRegistry } from './web/routes/agent-registry.js'
+import { tryHandleAgentConsole } from './web/routes/agent-console.js'
 import { tryHandleMarveen } from './web/routes/marveen.js'
 import { tryHandleRecall } from './web/routes/recall.js'
 import { tryHandleBackgroundTasks, sweepOrphanedBackgroundTasks } from './web/routes/background-tasks.js'
@@ -124,6 +125,7 @@ export function startWebServer(port = 3420): http.Server {
       // Must precede tryHandleAgents — the latter's `^/api/agents/([^/]+)$`
       // matcher would otherwise swallow `/api/agents/registry` as a name lookup.
       if (await tryHandleAgentRegistry(routeCtx)) return
+      if (await tryHandleAgentConsole(routeCtx)) return
       if (await tryHandleAgents(routeCtx, WEB_DIR)) return
       if (await tryHandleMarveen(routeCtx, WEB_DIR)) return
       if (await tryHandleBackgroundTasks(routeCtx)) return

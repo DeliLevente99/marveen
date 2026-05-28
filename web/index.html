@@ -1145,6 +1145,7 @@
           <button class="tab-btn" data-tab="channel">Csatorna</button>
           <button class="tab-btn" data-tab="skills">Skillek</button>
           <button class="tab-btn" data-tab="team">Csapat</button>
+          <button class="tab-btn" data-tab="console">Konzol</button>
         </div>
 
         <!-- Tab: Overview -->
@@ -1460,6 +1461,20 @@
             <small style="display:block;margin-top:6px;color:var(--text-muted);font-size:12px">A router alapból a jelent-kapcsolat és a delegálási lista alapján dönti el, hogy egy üzenet megbízható csapattárstól jön-e. Itt további ügynököket jelölhetsz kézzel &mdash; pl. egy cross-team együttműködő partner, akivel nincs hierarchikus kapcsolat, de a levelezése mégis csapattársi.</small>
           </div>
           <button class="btn-secondary btn-compact agent-save-section" id="saveTeamBtn">Mentés</button>
+        </div>
+
+        <!-- Tab: Console -->
+        <div class="tab-panel" id="tabConsole" hidden>
+          <div class="console-toolbar">
+            <span class="console-status" id="consoleStatus">betöltés…</span>
+            <label class="console-autoscroll-label">
+              <input type="checkbox" id="consoleAutoscroll" checked>
+              Auto-görgetés
+            </label>
+            <button class="btn-secondary btn-compact" id="consoleRefreshBtn">Frissítés</button>
+          </div>
+          <pre class="console-pane" id="consolePane">A konzol megnyitásakor frissül.</pre>
+          <small class="console-hint">A pty-server pane snapshot, 2 másodpercenként frissül a tab nyitva tartása alatt. Csak megjelenítés — gépelni a session-be a Discord/Telegram csatornán keresztül lehet.</small>
         </div>
 
         <!-- Bottom actions -->

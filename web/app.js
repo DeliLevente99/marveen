@@ -1392,6 +1392,42 @@ function stopChannelAutoPoll() {
   if (channelAutoPollTimer) { clearInterval(channelAutoPollTimer); channelAutoPollTimer = null }
 }
 
+// --- Console tab: pane snapshot polling ---
+let consoleAutoPollTimer = null
+async function refreshConsolePane() {
+  if (!currentAgent) return
+  const statusEl = document.getElementById('consoleStatus')
+  const paneEl = document.getElementById('consolePane')
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(currentAgent.name)}/console`)
+    if (!r.ok) {
+      statusEl.textContent = `HTTP ${r.status}`
+      return
+    }
+    const data = await r.json()
+    if (!data.sessionExists) {
+      statusEl.textContent = `session nem fut (${data.sessionName})`
+      paneEl.textContent = '(az ágens session nem aktív — Indítsd el az Áttekintés tabban)'
+      return
+    }
+    const autoscroll = document.getElementById('consoleAutoscroll').checked
+    paneEl.textContent = data.pane || '(üres pane)'
+    statusEl.textContent = `session: ${data.sessionName} · ${data.pane.length} char`
+    if (autoscroll) paneEl.scrollTop = paneEl.scrollHeight
+  } catch (err) {
+    statusEl.textContent = 'hiba: ' + (err && err.message ? err.message : String(err))
+  }
+}
+function startConsoleAutoPoll() {
+  refreshConsolePane()
+  if (consoleAutoPollTimer) return
+  consoleAutoPollTimer = setInterval(refreshConsolePane, 2000)
+}
+function stopConsoleAutoPoll() {
+  if (consoleAutoPollTimer) { clearInterval(consoleAutoPollTimer); consoleAutoPollTimer = null }
+}
+document.getElementById('consoleRefreshBtn')?.addEventListener('click', refreshConsolePane)
+
 function channelApiBase() {
   // Per-agent base; Marveen is also served here for sub-resources
   // (pending/allowed/invites) because those handlers in routes/agents.ts
@@ -1414,6 +1450,8 @@ function switchAgentTab(tab) {
   document.getElementById('tabChannel').hidden = tab !== 'channel'
   document.getElementById('tabSkills').hidden = tab !== 'skills'
   document.getElementById('tabTeam').hidden = tab !== 'team'
+  document.getElementById('tabConsole').hidden = tab !== 'console'
+  if (tab === 'console') startConsoleAutoPoll(); else stopConsoleAutoPoll()
   if (tab === 'channel') startChannelAutoPoll()
   else stopChannelAutoPoll()
 }
