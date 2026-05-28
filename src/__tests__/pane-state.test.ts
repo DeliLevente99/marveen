@@ -135,6 +135,21 @@ const PENDING_PASTE = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Windows / ConPTY collapses spaces inside the placeholder rendering:
+// the same paste-stub that arrives as "[Pasted text #1 +234 chars]" on
+// POSIX shows up as "[Pastedtext#1+234chars]" on ConPTY. Pre-fix,
+// PENDING_PASTE_RX required literal spaces -> never matched on Windows
+// -> shouldRetrySubmit returned false on stuck placeholders -> the
+// retry-Enter never fired -> inter-agent messages stayed parked in the
+// input box forever despite being marked "delivered" in the DB.
+const PENDING_PASTE_CONPTY = [
+  '',
+  SEP,
+  '> [Pastedtext#1][Pastedtext#2+1lines] ',
+  SEP,
+  '  ⏵⏵bypasspermissionson (shift+tabtocycle)·←foragents',
+].join('\n')
+
 // Historical ❯ above the separators (scrollback). Must NOT count as
 // parked input -- the input box is strictly the region between the two
 // most recent separators.
@@ -555,6 +570,14 @@ describe('shouldRetrySubmit', () => {
     // regardless of payload hint.
     expect(shouldRetrySubmit(PENDING_PASTE, '')).toBe(true)
     expect(shouldRetrySubmit(PENDING_PASTE, PAYLOAD_HINT)).toBe(true)
+  })
+
+  it('detects ConPTY collapsed-space [Pastedtext#N] placeholders as stuck', () => {
+    // Same stuck-placeholder scenario but ConPTY rendered the brackets
+    // without spaces. Pre-fix, PENDING_PASTE_RX missed and the router
+    // never retried -- inter-agent messages stayed wedged forever.
+    expect(shouldRetrySubmit(PENDING_PASTE_CONPTY, '')).toBe(true)
+    expect(shouldRetrySubmit(PENDING_PASTE_CONPTY, PAYLOAD_HINT)).toBe(true)
   })
 
   it('detects a multi-placeholder mixed-mode buffer as stuck', () => {

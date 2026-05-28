@@ -97,8 +97,15 @@ const BUSY_INDICATORS: RegExp[] = [
 // Pasted-text placeholder. Claude Code lifts bursts of input keys into
 // `[Pasted text #N +X chars]` stubs, which sit in the input buffer and
 // never auto-submit on Enter. Treat as busy so the scheduler doesn't pile
-// a second prompt on top.
-const PENDING_PASTE_RX = /\[Pasted text #\d+/
+// a second prompt on top. Inter-word whitespace is `\s*` rather than a
+// literal space because Windows ConPTY collapses spaces inside the
+// placeholder rendering -- `[Pasted text #1]` on POSIX arrives as
+// `[Pastedtext#1]` on Windows. Same root cause as the IDLE_FOOTER_RX
+// relaxation; pre-fix, shouldRetrySubmit's PASTE-detection path never
+// fired on ConPTY, the retry-Enter never ran, and inter-agent messages
+// stayed stuck as placeholders in the input box forever (status=delivered
+// in the DB because sendText succeeded, but never actually submitted).
+const PENDING_PASTE_RX = /\[Pasted\s*text\s*#\d+/
 
 // Input-box separator lines are made of U+2500 BOX DRAWINGS LIGHT
 // HORIZONTAL. At least 10 in a run to ignore stray `-` glyphs.
