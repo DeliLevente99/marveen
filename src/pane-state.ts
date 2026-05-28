@@ -127,8 +127,20 @@ export function detectPaneState(
 ): PaneState {
   if (!pane || !pane.trim()) return 'unknown'
 
+  // Exclude the input box content from BUSY_INDICATORS scanning. On
+  // ConPTY a completed turn can leave its summary line (e.g.
+  // `Sketching… (3s · ↓ 49 tokens · thinking)`) rendered INSIDE the input
+  // box between the two separators -- the tokens-arrow regex then false-
+  // positives forever on what is actually post-turn scrollback. The
+  // output area above the input box (where the LIVE spinner is painted
+  // during an active turn) and the status area below the input box
+  // (where "esc to interrupt" surfaces) remain in scope. Falls back to
+  // the whole pane when the input box structure isn't identifiable
+  // (no footer or single-separator panes during startup) so we stay
+  // conservative on under-formed states.
+  const scanRegion = busyScanRegion(pane)
   for (const rx of BUSY_INDICATORS) {
-    if (rx.test(pane)) return 'busy'
+    if (rx.test(scanRegion)) return 'busy'
   }
 
   if (!IDLE_FOOTER_RX.test(pane)) return 'unknown'
@@ -169,6 +181,38 @@ export function detectPaneState(
  */
 export function isReadyForPrompt(pane: string): boolean {
   return detectPaneState(pane) === 'idle'
+}
+
+// Return the pane with the input box interior excised, so BUSY_INDICATORS
+// regexes never match scrollback artifacts that ConPTY may have parked
+// inside the input box. Preserves the OUTPUT region above the top
+// separator (where Claude Code paints the live spinner during an active
+// turn) and the STATUS region below the bottom separator (where the
+// "esc to interrupt" prompt surfaces) so the busy-detection semantics
+// existing fixtures depend on are unchanged.
+//
+// Falls back to the whole pane when the input box can't be located
+// (no footer, no separator, only one separator) -- under-formed pane
+// states should remain conservative.
+function busyScanRegion(pane: string): string {
+  const lines = pane.split('\n')
+  const footerIdx = lines.findIndex(l => IDLE_FOOTER_RX.test(l))
+  if (footerIdx < 0) return pane
+  let bottomSep = -1
+  for (let i = footerIdx - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { bottomSep = i; break }
+  }
+  if (bottomSep < 0) return pane
+  let topSep = -1
+  for (let i = bottomSep - 1; i >= 0; i--) {
+    if (BOX_SEP_RX.test(lines[i])) { topSep = i; break }
+  }
+  if (topSep < 0) return pane
+  // Concatenate output-above + status-below, dropping the input box
+  // interior between topSep and bottomSep (exclusive on both ends).
+  const above = lines.slice(0, topSep + 1)
+  const below = lines.slice(bottomSep)
+  return [...above, ...below].join('\n')
 }
 
 // Locate the live Claude Code input box and return its inner content as

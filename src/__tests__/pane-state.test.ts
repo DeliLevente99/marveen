@@ -86,6 +86,24 @@ const BUSY_TOOL_USE_ACTIVE = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt',
 ].join('\n')
 
+// Windows / ConPTY post-turn artifact: a completed spinner's summary line
+// like `(3s · ↓ 49 tokens · thinking)` ends up rendered INSIDE the input
+// box between the two separators instead of being cleared. Pre-fix, this
+// false-tripped BUSY_INDICATORS[1] (the tokens-arrow pattern) and froze
+// the router into thinking the session was perpetually busy. The fix:
+// busy-indicator scanning excludes the input box interior, so post-turn
+// scrollback there is ignored. Status indicators above the box (live
+// spinner) or below it (esc to interrupt) still trip busy as before.
+const IDLE_CONPTY_SCROLLBACK_IN_INPUT_BOX = [
+  '  Some earlier output line',
+  SEP,
+  '●Úgy tűnik, hogy egy hiányos üzenetet küldtél. Mire gondoltál?',
+  '✽ Sketching… (3s · ↓ 49 tokens · thinking)',
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 const TYPING_PARKED = [
   '',
   SEP,
@@ -269,6 +287,15 @@ describe('detectPaneState', () => {
     // any agent's tool call. Only active-turn signals (spinner, tokens,
     // esc-to-interrupt, footer-scoped) count.
     expect(detectPaneState(IDLE_AFTER_TOOL_USE)).toBe('idle')
+  })
+
+  it('ignores tokens-arrow pattern parked inside the input box (ConPTY post-turn artifact)', () => {
+    // Windows / ConPTY can leave a completed turn's `(Ns · ↓ X tokens · thinking)`
+    // summary rendered between the two box separators instead of clearing it.
+    // BUSY_INDICATORS[1] (the tokens-arrow regex) used to match that text and
+    // froze the router into "session busy" until the 64KB capture buffer
+    // rolled over. Busy-indicator scanning now excludes the input box interior.
+    expect(detectPaneState(IDLE_CONPTY_SCROLLBACK_IN_INPUT_BOX)).toBe('idle')
   })
 
   it('detects typing when text is parked in the input box', () => {
