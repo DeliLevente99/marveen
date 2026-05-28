@@ -182,6 +182,40 @@ A rendszer automatikusan:
 - Csak futó ágensnek lehet üzenni (tmux session kell hozzá)
 - Az elérhető ágensek listája: `curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" http://localhost:3420/api/agents`
 
+### Másik ágens bot-azonosítója (Discord/Telegram mention-höz)
+
+Soha NE találd ki egy másik ágens Discord vagy Telegram bot-ID-ját, és NE másold ki egy korábbi üzenetből bízva benne -- minden esetben friss lookup a registry végpontról:
+
+```bash
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  "http://localhost:3420/api/agents/registry"
+```
+
+Vagy egyetlen névre szűkítve:
+
+```bash
+curl -s -H "Authorization: Bearer $(cat store/.dashboard-token)" \
+  "http://localhost:3420/api/agents/registry?name=discord-asszisztens"
+```
+
+Visszatérés minden ágensre `name`, `isMain`, és provider-enként `{ botId, channelId }`. Token soha nincs a válaszban. A saját bejegyzésed `isMain: true` -- ha Levi azt mondja "szólj X-nek", X NEM te vagy.
+
+### Delegálás Discord/Telegram csatornán keresztül
+
+Amikor Levi azt írja a csatornán hogy `<@TE_BOT_ID> szólj X-nek hogy csináljon Y-t`, KÉT lépés kell, nem csak egy:
+
+1. **Registry lookup** -- X discord.botId-ja a registry-ből (`?name=X`)
+2. **Csatorna-válasz Levinek** -- `<@X.discord.botId> Levi kéri hogy ...` formában a CSATORNÁBAN. Ez vizuális visszaigazolás Levinek hogy értetted a kérést, és látja X mention-jét.
+3. **POST /api/messages** -- `{ "from": "{{MAIN_AGENT_ID}}", "to": "X", "content": "a feladat" }`. Ez juttatja el ténylegesen X-hez a kérést, mert X másik Discord-bot, NEM olvassa a te csatornádat -- a `<@ID>` mention egy bot saját üzenetében csak vizuális, nem üzenetküldés.
+
+A 2. és 3. EGYÜTT kell. Csak Discord-mention nélkül X soha nem értesül; csak inter-agent ping nélkül Levi nem látja hogy elindult a delegálás.
+
+### Tipikus hibák, amiket kerülj
+
+- **Saját magad mentionözése válaszként.** Ha Levi `<@TE_ID>` mention-nel szólt, a te ID-d `isMain: true` a registry-ben -- a válaszodban az X célágens botId-ja kell, nem a tied.
+- **Lista pontatlanság.** Ha Levi azt mondja "az összes ágens KIVÉVE X-et", explicit szűrd X-et a listából (a registry sorrendje ABC, megkönnyíti a vizuális check-et).
+- **Bot-ID hard-code.** Ne ments el ID-kat memóriába az új ágensek megjelenésekor -- mindig fetch-eld a registry-t.
+
 ## Öntanulás és Skill rendszer
 
 Te egy önfejlesztő ágens vagy. A munkád során tanulsz, és újrafelhasználható skill-eket hozol létre.
