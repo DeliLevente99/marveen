@@ -24,7 +24,7 @@ import { join, delimiter as PATH_DELIMITER } from 'node:path'
 import { homedir } from 'node:os'
 import { PROJECT_ROOT, MAIN_AGENT_ID, CHANNEL_PROVIDER, OLLAMA_URL } from '../config.js'
 import { logger } from '../logger.js'
-import { resolveFromPath } from '../platform.js'
+import { resolveFromPath, repairWindowsClaudeShim } from '../platform.js'
 import { getProvider, channelStateDir } from '../channel-provider.js'
 import { agentRuntime, type SessionName } from '../platform/agent-runtime.js'
 import { MAIN_CHANNELS_SESSION } from './main-agent.js'
@@ -159,6 +159,15 @@ export function startMainChannelsSession(): void {
   // .cmd entry on Windows and the bare absolute path on POSIX. Both
   // work directly with pty.spawn.
   const claudeBin = resolveFromPath('claude')
+  // Heal a broken npm shim before spawning. If a previous npm upgrade was
+  // interrupted (renamed claude.exe -> claude.exe.old.<ts> but never finished
+  // downloading the new exe), the .cmd shim will fail to spawn — taking the
+  // marveen-channels session down within ~200ms and tripping stages 1-4.
+  // No-op on POSIX and on healthy installs.
+  const repair = repairWindowsClaudeShim(claudeBin)
+  if (repair.repaired) {
+    logger.warn({ restoredFrom: repair.restoredFrom, claudeBin }, 'Restored claude.exe from .old.<ts> sibling before spawning channels session')
+  }
   try {
     agentRuntime.startSession({
       name: MAIN_CHANNELS_SESSION,
