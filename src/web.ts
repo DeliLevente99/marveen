@@ -29,6 +29,7 @@ import { tryHandleConnectorsHu } from './web/routes/connectors-hu.js'
 import { tryHandleAgentsSkills } from './web/routes/agents-skills.js'
 import { tryHandleSkills } from './web/routes/skills.js'
 import { tryHandleAgents } from './web/routes/agents.js'
+import { tryHandleAgentRegistry } from './web/routes/agent-registry.js'
 import { tryHandleMarveen } from './web/routes/marveen.js'
 import { tryHandleRecall } from './web/routes/recall.js'
 import { tryHandleBackgroundTasks, sweepOrphanedBackgroundTasks } from './web/routes/background-tasks.js'
@@ -120,6 +121,9 @@ export function startWebServer(port = 3420): http.Server {
       if (await tryHandleConnectors(routeCtx)) return
       if (await tryHandleAgentsSkills(routeCtx)) return
       if (await tryHandleSkills(routeCtx)) return
+      // Must precede tryHandleAgents — the latter's `^/api/agents/([^/]+)$`
+      // matcher would otherwise swallow `/api/agents/registry` as a name lookup.
+      if (await tryHandleAgentRegistry(routeCtx)) return
       if (await tryHandleAgents(routeCtx, WEB_DIR)) return
       if (await tryHandleMarveen(routeCtx, WEB_DIR)) return
       if (await tryHandleBackgroundTasks(routeCtx)) return
