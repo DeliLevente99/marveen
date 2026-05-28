@@ -47,7 +47,16 @@ export type PaneState = 'idle' | 'busy' | 'typing' | 'unknown'
 //       happens to contain "bypass permissions on · 1 shell" verbatim
 //       (an echoed log line, a quoted message, etc.) which would
 //       otherwise be misread as idle.
-const IDLE_FOOTER_RX = /bypass permissions on(?: \(shift\+tab to cycle\)| · \d+ shells? · (?:ctrl\+t|↓ to manage))|\? for shortcuts/
+// Inter-word whitespace is `\s*` rather than a literal space: on Windows
+// ConPTY collapses spaces inside the status-bar footer when repainting,
+// so the same line shows up as `bypasspermissionson (shift+tabtocycle)`
+// instead of `bypass permissions on (shift+tab to cycle)`. The strict
+// literal-space form left every ConPTY session classified as 'unknown'
+// (footer not matched -> detectPaneState falls out of the idle branch),
+// freezing inter-agent message delivery and scheduled-task injection.
+// `\s*` matches both shapes; tmux POSIX output (single spaces) still
+// matches identically.
+const IDLE_FOOTER_RX = /bypass\s*permissions\s*on(?:\s*\(shift\s*\+\s*tab\s*to\s*cycle\)|\s*·\s*\d+\s*shells?\s*·\s*(?:ctrl\s*\+\s*t|↓\s*to\s*manage))|\?\s*for\s*shortcuts/
 
 // Positive busy signals. ANY match anywhere in the pane means the turn
 // is mid-flight, even if the footer looks idle for a frame.

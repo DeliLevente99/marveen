@@ -104,6 +104,21 @@ const IDLE_CONPTY_SCROLLBACK_IN_INPUT_BOX = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Windows / ConPTY status-bar repaint collapses inter-word spaces in the
+// footer, so the same idle footer that POSIX shows as
+// "bypass permissions on (shift+tab to cycle)" arrives as
+// "bypasspermissionson (shift+tabtocycle)". The pre-fix strict-spacing
+// IDLE_FOOTER_RX returned no match, detectPaneState dropped to 'unknown',
+// and every inter-agent message stalled. Fixture pins the relaxed
+// `\s*` form against regression.
+const IDLE_CONPTY_COLLAPSED_FOOTER = [
+  '',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵bypasspermissionson (shift+tabtocycle)·←foragents◉xhigh·/effort',
+].join('\n')
+
 const TYPING_PARKED = [
   '',
   SEP,
@@ -296,6 +311,13 @@ describe('detectPaneState', () => {
     // froze the router into "session busy" until the 64KB capture buffer
     // rolled over. Busy-indicator scanning now excludes the input box interior.
     expect(detectPaneState(IDLE_CONPTY_SCROLLBACK_IN_INPUT_BOX)).toBe('idle')
+  })
+
+  it('matches the ConPTY-collapsed idle footer (no inter-word spaces in status bar)', () => {
+    // ConPTY repaints the status-bar footer without spaces between the
+    // identifier words. Pre-fix, IDLE_FOOTER_RX required literal spaces and
+    // returned 'unknown' on every Windows session, freezing the router.
+    expect(detectPaneState(IDLE_CONPTY_COLLAPSED_FOOTER)).toBe('idle')
   })
 
   it('detects typing when text is parked in the input box', () => {
