@@ -340,9 +340,16 @@ export function shouldRetrySubmit(
 ): boolean {
   if (!pane || !pane.trim()) return false
 
-  // Busy pane: the turn is mid-flight, no retry needed.
+  // Busy pane: the turn is mid-flight, no retry needed. Scope is the
+  // current-turn live region (same as detectPaneState) so stale
+  // "esc to interrupt" footers in scrollback don't block the retry
+  // path -- otherwise a stuck [Pasted text #N] placeholder in the
+  // current input box would never get the rescue Enter on long
+  // sessions with multiple prior turn footers baked into the
+  // capture buffer.
+  const busyScan = busyScanRegion(pane)
   for (const rx of BUSY_INDICATORS) {
-    if (rx.test(pane)) return false
+    if (rx.test(busyScan)) return false
   }
   // Without an idle footer the pane is either not Claude Code or in an
   // unknown render state. Be conservative and skip.

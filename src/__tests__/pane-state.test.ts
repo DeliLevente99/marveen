@@ -152,6 +152,33 @@ const IDLE_AFTER_MANY_TURNS_SCROLLBACK = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Same long-session shape but the CURRENT input box has a stuck paste
+// placeholder. shouldRetrySubmit must return true so the router fires
+// rescue Enters. Pre-fix the BUSY check on the whole pane saw a prior
+// turn's `esc to interrupt` in scrollback and bailed -- the retry
+// path never ran, the placeholder stayed wedged forever, and the
+// receiving session never processed the message.
+const PARKED_PASTE_AFTER_PRIOR_TURNS = [
+  '  Old reply from turn 1',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt',
+  '',
+  '  Old reply from turn 2',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt',
+  '',
+  // Current input box: paste placeholder parked from a sendText that
+  // never auto-submitted. Footer is idle (no esc-to-interrupt).
+  SEP,
+  '❯ [Pasted text #1 +320 chars] ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 const TYPING_PARKED = [
   '',
   SEP,
@@ -621,6 +648,14 @@ describe('shouldRetrySubmit', () => {
     // never retried -- inter-agent messages stayed wedged forever.
     expect(shouldRetrySubmit(PENDING_PASTE_CONPTY, '')).toBe(true)
     expect(shouldRetrySubmit(PENDING_PASTE_CONPTY, PAYLOAD_HINT)).toBe(true)
+  })
+
+  it('still retries placeholder rescue when scrollback holds stale esc-to-interrupt footers', () => {
+    // Long sessions accumulate prior turn footers. shouldRetrySubmit's
+    // BUSY scan must look at the CURRENT-turn live region only -- not
+    // the whole pane -- otherwise a single old footer above kills the
+    // rescue Enter and the placeholder stays wedged forever.
+    expect(shouldRetrySubmit(PARKED_PASTE_AFTER_PRIOR_TURNS, '')).toBe(true)
   })
 
   it('detects a multi-placeholder mixed-mode buffer as stuck', () => {
