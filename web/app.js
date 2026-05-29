@@ -1859,7 +1859,7 @@ function updateProviderUI() {
     if (pairingInfo) pairingInfo.textContent = 'Ha valaki ír a botnak, a plugin egy kódot küld neki. Ide írd be a kódot a jóváhagyáshoz.'
   } else if (currentChannelProvider === 'discord') {
     if (title) title.textContent = 'Discord bot bekotese'
-    if (steps) steps.innerHTML = '<li>Menj a <strong>Discord Developer Portal</strong>-ra (discord.com/developers)</li><li>Hozz letre egy uj Application-t es Bot-ot</li><li>Masold be a Bot Token-t ide</li><li>Opcionálisan: másold be a kívánt szerver-csatorna ID-jét lent</li>'
+    if (steps) steps.innerHTML = '<li>Menj a <strong>Discord Developer Portal</strong>-ra (discord.com/developers)</li><li>Hozz letre egy uj Application-t es Bot-ot</li><li>Masold be a Bot Token-t ide</li><li>Másold be a kívánt szerver-csatorna ID-jét lent</li>'
     if (label) label.textContent = 'Bot Token'
     if (input) input.placeholder = 'MTIzNDU2Nzg5MDEyMzQ1Njc4OQ...'
     if (slackGroup) slackGroup.hidden = true
