@@ -219,6 +219,27 @@ const IDLE_LONG_SESSION_MULTIPLE_COMPLETED_SUBTURNS = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Windows / ConPTY post-turn artifact in BARE-TOKEN form (no `thought
+// for` suffix): `Infusing… (9s · ↓ 269 tokens)`. The `lastCompletedAt`
+// anchor can't see this one (no marker), but the spinner sits several
+// lines above topSep with a reply + tip + empty input in between. The
+// LIVE busy indicator on POSIX sits within 1-2 lines of topSep, so
+// clamping the upper edge to `topSep - 2` lets the live signal
+// through while excluding this stale render.
+const IDLE_CONPTY_BARE_TOKEN_POST_TURN_FAR_FROM_TOPSEP = [
+  '  Older scrollback',
+  '●Marveen finished a reply here.',
+  '',
+  '  More text from earlier turn',
+  '✶Infusing…(9s·↓269tokens)',          // stale spinner (no thought-for)
+  ' ⎿  Tip:Use/agentstooptimize',         // tip line below the spinner
+  '',                                     // empty
+  SEP,                                    // topSep
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 const PARKED_PASTE_AFTER_PRIOR_TURNS = [
   '  Old reply from turn 1',
   SEP,
@@ -461,6 +482,15 @@ describe('detectPaneState', () => {
     // distinguish it from a live spinner (which renders "thinking)"
     // or a bare token tail).
     expect(detectPaneState(IDLE_CONPTY_POST_TURN_SUMMARY)).toBe('idle')
+  })
+
+  it('ignores bare-token post-turn spinner sitting several lines above the current input box', () => {
+    // The ConPTY post-turn spinner can render WITHOUT a `thought for`
+    // suffix (just `(Ns · ↓N tokens)`), so neither the regex tightening
+    // nor the lastCompletedAt anchor saves us. The proximity clamp
+    // (live busy must be within ~2 lines of topSep) is the load-bearing
+    // protection here.
+    expect(detectPaneState(IDLE_CONPTY_BARE_TOKEN_POST_TURN_FAR_FROM_TOPSEP)).toBe('idle')
   })
 
   it('ignores stale [Pastedtext#N] placeholders rendered into scrollback by completed turns', () => {

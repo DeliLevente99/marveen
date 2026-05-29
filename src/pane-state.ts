@@ -260,7 +260,16 @@ function busyScanRegion(pane: string): string {
   for (let i = topSep - 1; i >= 0; i--) {
     if (IDLE_FOOTER_RX.test(lines[i])) { prevFooter = i; break }
   }
-  const outputStart = Math.max(lastCompletedAt + 1, prevFooter + 1)
+  // Additionally clamp the upper edge to two lines above topSep. Even
+  // when a completed-turn marker or prior footer is far above (long
+  // session with intermediate footers ConPTY didn't preserve), the
+  // LIVE busy indicator is anchored within ~1-2 lines above the
+  // current input box -- POSIX 1-frame-gap spinner sits immediately
+  // above, ConPTY's lingering post-turn spinner sits several lines
+  // back behind the reply text + tip. The clamp lets the genuine
+  // live signal through while excluding the stale render.
+  const semanticStart = Math.max(lastCompletedAt + 1, prevFooter + 1)
+  const outputStart = Math.max(semanticStart, topSep - 2)
   const above = lines.slice(outputStart, topSep + 1)
   const below = lines.slice(bottomSep)
   return [...above, ...below].join('\n')
