@@ -177,6 +177,23 @@ const IDLE_CONPTY_POST_TURN_SUMMARY = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Stale `[Pastedtext#N]` placeholder rendered into deep scrollback by a
+// COMPLETED prior turn (e.g. an /ide tip render or a multi-line tool
+// output that included the literal text). The CURRENT input box is
+// empty. Pre-fix, detectPaneState's PENDING_PASTE_RX scan ran against
+// the whole pane and false-positived on the scrollback occurrence,
+// leaving the session classified 'busy' until the buffer rolled past
+// the stale render. Fix scopes the paste check strictly to the live
+// input box -- only there does a placeholder mean a stuck paste.
+const IDLE_STALE_PASTED_TEXT_IN_SCROLLBACK = [
+  '  Something earlier rendered a [Pastedtext#1] paste again to expand hint',
+  '  Some more scrollback',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 // Long ConPTY session where intermediate turn footers were not preserved
 // in scrollback (ConPTY merge/overwrite), so the "previous footer"
 // anchor walks way up to the session-start banner -- leaving multiple
@@ -444,6 +461,13 @@ describe('detectPaneState', () => {
     // distinguish it from a live spinner (which renders "thinking)"
     // or a bare token tail).
     expect(detectPaneState(IDLE_CONPTY_POST_TURN_SUMMARY)).toBe('idle')
+  })
+
+  it('ignores stale [Pastedtext#N] placeholders rendered into scrollback by completed turns', () => {
+    // The paste placeholder is only meaningful when it sits in the live
+    // input box -- a stale render in scrollback from a finished turn
+    // must not trigger 'busy'.
+    expect(detectPaneState(IDLE_STALE_PASTED_TEXT_IN_SCROLLBACK)).toBe('idle')
   })
 
   it('ignores stale "thinking)" spinners from older sub-turns behind the latest completed-turn marker', () => {

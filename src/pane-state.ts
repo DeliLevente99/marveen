@@ -171,8 +171,6 @@ export function detectPaneState(
 
   if (!IDLE_FOOTER_RX.test(pane)) return 'unknown'
 
-  if (PENDING_PASTE_RX.test(pane)) return 'busy'
-
   // Find the input box: two BOX_SEP_RX lines framing the current prompt.
   // Scan UPWARDS from the footer so we stay inside the live box and
   // don't pick up historical ❯ lines from scrollback.
@@ -191,6 +189,13 @@ export function detectPaneState(
     }
     if (topSep >= 0 && bottomSep > topSep) {
       const inputLines = lines.slice(topSep + 1, bottomSep)
+      // PENDING_PASTE_RX scoped strictly to the live input box. A whole-
+      // pane scan would catch stale `[Pastedtext#N] paste again to expand`
+      // strings rendered into scrollback by completed turns -- pre-fix
+      // this misclassified the session 'busy' forever on long-running
+      // ConPTY sessions where the placeholder render lingered in
+      // scrollback after the originating turn finished.
+      if (inputLines.some(l => PENDING_PASTE_RX.test(l))) return 'busy'
       if (inputLines.some(l => PARKED_INPUT_RX.test(l))) {
         return opts.mergeTypingAsBusy ? 'busy' : 'typing'
       }
