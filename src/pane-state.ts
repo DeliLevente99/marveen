@@ -85,13 +85,23 @@ const IDLE_FOOTER_RX = /bypass\s*permissions\s*on(?:\s*\(shift\s*\+\s*tab\s*to\s
 const BUSY_INDICATORS: RegExp[] = [
   /\besc to interrupt\b/,
   // Tokens-down-arrow counter: "(52s · ↓ 2.6k tokens ..." Turn-scoped,
-  // overwritten with whitespace the moment the turn completes.
-  /\(\s*\d+s\s*·\s*↓\s*\d/,
+  // overwritten with whitespace the moment the turn completes -- on
+  // POSIX. On Windows ConPTY the completed-turn summary persists in
+  // the output region above the input box (e.g.
+  // `Baking… (4s · ↓ 95 tokens · thought for 2s)`) and tripped a false
+  // busy until detectPaneState's idle pane was unreachable. The negative
+  // lookahead `(?!thought for)` excludes the completed-turn shape: live
+  // spinners show `thinking)` or a bare token tail, completed ones show
+  // `thought for Xs)` between the open paren and close. Active matches
+  // (BUSY_TOKENS_ONLY fixture and friends) still hit because their tail
+  // never contains "thought for".
+  /\(\s*\d+s\s*·\s*↓\s*\d(?:(?!thought for).)*?\)/,
   // Known spinner labels paired with the turn-scoped `(Ns · ↓` tail on
   // the same line. The tail requirement kills the "Thinking…" prose
   // false positive. Non-exhaustive by design; the bare tokens pattern
-  // above is the authoritative fallback.
-  /\b(?:Combobulating|Beaming|Thinking|Pondering|Reticulating|Configuring|Noodling|Ruminating|Percolating|Cogitating|Deliberating|Contemplating|Musing|Brewing|Synthesizing|Distilling|Refining|Simmering|Crafting|Formulating|Consulting|Unfurling|Unspooling|Unraveling)…\s*\(\s*\d+s\s*·\s*↓/,
+  // above is the authoritative fallback. Same `thought for` exclusion
+  // applied here for symmetry.
+  /\b(?:Combobulating|Beaming|Thinking|Pondering|Reticulating|Configuring|Noodling|Ruminating|Percolating|Cogitating|Deliberating|Contemplating|Musing|Brewing|Synthesizing|Distilling|Refining|Simmering|Crafting|Formulating|Consulting|Unfurling|Unspooling|Unraveling)…\s*\(\s*\d+s\s*·\s*↓(?:(?!thought for).)*?\)/,
 ]
 
 // Pasted-text placeholder. Claude Code lifts bursts of input keys into

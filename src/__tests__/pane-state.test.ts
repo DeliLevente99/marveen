@@ -158,6 +158,25 @@ const IDLE_AFTER_MANY_TURNS_SCROLLBACK = [
 // turn's `esc to interrupt` in scrollback and bailed -- the retry
 // path never ran, the placeholder stayed wedged forever, and the
 // receiving session never processed the message.
+// Windows / ConPTY post-turn artifact in the CURRENT turn's output
+// region: the spinner line like `Baking… (Ns · ↓N tokens · thought for Xs)`
+// survives in the area just above the input box even after the turn
+// ended. The "thought for" tail is what distinguishes a completed
+// summary from a live spinner -- live spinners render either "thinking)"
+// or a bare token tail. Pre-fix the tokens-arrow regex tripped on this
+// completed summary and the pane stayed classified 'busy' forever.
+const IDLE_CONPTY_POST_TURN_SUMMARY = [
+  '  Some scrollback',
+  '',
+  '●Marveen finished its reply here.',
+  '·Baking… (4s · ↓95 tokens · thought for 2s)',
+  '  ⎿  Tip: Use /statusline to set up a custom status line',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 const PARKED_PASTE_AFTER_PRIOR_TURNS = [
   '  Old reply from turn 1',
   SEP,
@@ -393,6 +412,13 @@ describe('detectPaneState', () => {
     // identifier words. Pre-fix, IDLE_FOOTER_RX required literal spaces and
     // returned 'unknown' on every Windows session, freezing the router.
     expect(detectPaneState(IDLE_CONPTY_COLLAPSED_FOOTER)).toBe('idle')
+  })
+
+  it('ignores `thought for Xs)` post-turn spinner summary in current output area', () => {
+    // The completed-turn summary lingers on ConPTY -- the regex must
+    // distinguish it from a live spinner (which renders "thinking)"
+    // or a bare token tail).
+    expect(detectPaneState(IDLE_CONPTY_POST_TURN_SUMMARY)).toBe('idle')
   })
 
   it('ignores stale esc-to-interrupt footers in scrollback when current footer is idle', () => {
