@@ -177,6 +177,31 @@ const IDLE_CONPTY_POST_TURN_SUMMARY = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ].join('\n')
 
+// Long ConPTY session where intermediate turn footers were not preserved
+// in scrollback (ConPTY merge/overwrite), so the "previous footer"
+// anchor walks way up to the session-start banner -- leaving multiple
+// completed sub-turn spinner lines in scope. Each sub-turn has a
+// `thought for Xs)` marker; anchoring outputStart AFTER the latest such
+// marker cleanly cuts them out. Pre-fix, the older "thinking)" spinner
+// lines triggered BUSY[1] and the pane stayed classified 'busy' forever.
+const IDLE_LONG_SESSION_MULTIPLE_COMPLETED_SUBTURNS = [
+  '  Old session-start banner',
+  SEP + '⏵⏵bypasspermissionson (shift+tabtocycle)·esctointerrupt●high·/effort',
+  // ── Sub-turn 1 (completed) ──
+  '·Marinating… (2s · ↓25 tokens · thinking)',
+  '●First sub-turn reply',
+  '✻Marinating… (3s · ↓40 tokens · thought for 1s)',
+  // ── Sub-turn 2 (completed) ──
+  '·Marinating… (1s · ↓ 38 tokens · thinking)',
+  '●Second sub-turn reply',
+  '✽Marinating… (5s · ↓70 tokens · thought for 2s)',
+  '  ⎿  Tip: Use /memory',
+  SEP,
+  '❯ ',
+  SEP,
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+].join('\n')
+
 const PARKED_PASTE_AFTER_PRIOR_TURNS = [
   '  Old reply from turn 1',
   SEP,
@@ -419,6 +444,15 @@ describe('detectPaneState', () => {
     // distinguish it from a live spinner (which renders "thinking)"
     // or a bare token tail).
     expect(detectPaneState(IDLE_CONPTY_POST_TURN_SUMMARY)).toBe('idle')
+  })
+
+  it('ignores stale "thinking)" spinners from older sub-turns behind the latest completed-turn marker', () => {
+    // Long ConPTY sessions accumulate multiple completed sub-turns whose
+    // intermediate footers are not preserved in scrollback. The busy-
+    // scan upper edge must anchor to the LATEST `thought for Xs)`
+    // marker so older sub-turn spinners (which still render as
+    // "thinking)") don't false-trip the tokens-arrow regex.
+    expect(detectPaneState(IDLE_LONG_SESSION_MULTIPLE_COMPLETED_SUBTURNS)).toBe('idle')
   })
 
   it('ignores stale esc-to-interrupt footers in scrollback when current footer is idle', () => {

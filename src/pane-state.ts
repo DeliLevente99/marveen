@@ -234,18 +234,28 @@ function busyScanRegion(pane: string): string {
     if (BOX_SEP_RX.test(lines[i])) { topSep = i; break }
   }
   if (topSep < 0) return pane
-  // Anchor the "output above" upper edge to the previous footer in
-  // scrollback (if any). That footer is the bottom edge of the prior
-  // turn -- anything above it belongs to older turns and the
-  // "esc to interrupt" / tokens-arrow scrollback there must NOT count
-  // toward current-turn liveness. Pre-fix, long-running sessions
-  // accumulated several past footers in scrollback and the BUSY scan
-  // tripped on every one of them, freezing the router perpetually.
+  // Anchor the "output above" upper edge to the latest completed-turn
+  // marker (`thought for Xs)`) or to the previous footer, whichever is
+  // closer to topSep. The previous footer alone is unreliable on
+  // long-running ConPTY sessions: intermediate turn footers get merged
+  // into the separator scrollback or overwritten, so prevFooter often
+  // points way up at the session-start header, leaving 80+ lines of
+  // mixed-turn output (including stale "thinking)" spinners from older
+  // sub-turns) in scope. The completed-turn marker IS reliably
+  // preserved by ConPTY, so anchoring above it cleanly cuts off all
+  // prior-turn artifacts. Live spinners ("thinking)") above it are
+  // also stale by definition -- they belong to a turn that has since
+  // completed.
+  const COMPLETED_TURN_MARKER_RX = /thought for \d+s\)/
+  let lastCompletedAt = -1
+  for (let i = topSep - 1; i >= 0; i--) {
+    if (COMPLETED_TURN_MARKER_RX.test(lines[i])) { lastCompletedAt = i; break }
+  }
   let prevFooter = -1
   for (let i = topSep - 1; i >= 0; i--) {
     if (IDLE_FOOTER_RX.test(lines[i])) { prevFooter = i; break }
   }
-  const outputStart = prevFooter + 1
+  const outputStart = Math.max(lastCompletedAt + 1, prevFooter + 1)
   const above = lines.slice(outputStart, topSep + 1)
   const below = lines.slice(bottomSep)
   return [...above, ...below].join('\n')
