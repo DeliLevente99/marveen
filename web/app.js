@@ -1000,7 +1000,17 @@ async function loadAgents() {
       fetch('/api/marveen'),
     ])
     agents = await agentsRes.json()
-    if (marveenRes.ok) window._marveen = await marveenRes.json()
+    if (marveenRes.ok) {
+      window._marveen = await marveenRes.json()
+      // A backend CHANNEL_PROVIDER-éhez igazitsuk a kliens-default-ot,
+      // hogy ne 'telegram' jelenjen meg amikor a backend discord-on van.
+      if (window._marveen?.channelProvider) {
+        currentChannelProvider = window._marveen.channelProvider
+        const sel = document.getElementById('chProviderSelect')
+        if (sel) sel.value = currentChannelProvider
+        if (typeof updateProviderUI === 'function') updateProviderUI()
+      }
+    }
     renderAgents()
   } catch (err) {
     console.error('Betöltés hiba:', err)
@@ -1061,6 +1071,8 @@ async function openMarveenDetail() {
   updateChannelTab({
     name: 'marveen',
     hasTelegram: mFull.hasTelegram !== undefined ? mFull.hasTelegram : true,
+    hasDiscord: mFull.hasDiscord,
+    hasSlack: mFull.hasSlack,
     telegramBotUsername: mFull.telegramBotUsername,
     running: true,
   })
@@ -1151,7 +1163,7 @@ function renderAgents() {
 
     const modelClass = agent.model && agent.model !== 'inherit' ? agent.model : ''
     const modelLabel = agent.model || 'inherit'
-    const chConnected = agent.hasTelegram || false
+    const chConnected = agentIsConnected(agent)
     const chDotClass = chConnected ? 'connected' : 'disconnected'
     const chLabel = chConnected ? 'Online' : 'Offline'
     const isRunning = agent.running || false
@@ -1206,7 +1218,7 @@ async function openAgentDetail(agentName) {
   document.getElementById('agentDetailModel').textContent = currentAgent.activeModel || currentAgent.model || 'inherit'
   document.getElementById('agentDetailModelRestarting').hidden = true
 
-  const chConnected = currentAgent.hasTelegram || false
+  const chConnected = agentIsConnected(currentAgent)
   document.getElementById('agentDetailChStatus').innerHTML = `<span class="tg-status"><span class="tg-dot ${chConnected ? 'connected' : 'disconnected'}"></span>${chConnected ? 'Csatlakozva' : 'Nincs bekötve'}</span>`
 
   // Settings tab - load Ollama + DeepSeek models then set value
@@ -1500,6 +1512,21 @@ document.getElementById('agentTabNav').addEventListener('click', (e) => {
 })
 
 let currentChannelProvider = 'telegram'
+// Az induláskor a backend CHANNEL_PROVIDER-jét lekérjük, és a dropdown +
+// state default-ot ahhoz igazitjuk -- igy ha a backend discord-on van,
+// a UI nem hardcode-olt 'telegram'-mal indul barmelyik oldalra is navigal a user.
+;(async function initChannelProviderDefault() {
+  try {
+    const res = await fetch('/api/marveen')
+    if (!res.ok) return
+    const data = await res.json()
+    if (!data.channelProvider || data.channelProvider === currentChannelProvider) return
+    currentChannelProvider = data.channelProvider
+    const sel = document.getElementById('chProviderSelect')
+    if (sel) sel.value = currentChannelProvider
+    if (typeof updateProviderUI === 'function') updateProviderUI()
+  } catch { /* ignore -- a kepernyo default-on marad */ }
+})()
 let channelAutoPollTimer = null
 function startChannelAutoPoll() {
   if (channelAutoPollTimer) return
@@ -1873,6 +1900,77 @@ document.getElementById('saveMcpJsonBtn').addEventListener('click', async () => 
 })
 
 // === Channel tab ===
+// Provider-aware "connected" check: a sub-agent record carries hasTelegram /
+// hasDiscord / hasSlack flags from the backend, Marveen carries the same
+// shape from /api/marveen. Falls back to hasTelegram for legacy callers.
+function agentIsConnected(agent) {
+  if (!agent) return false
+  if (currentChannelProvider === 'discord') return !!agent.hasDiscord
+  if (currentChannelProvider === 'slack') return !!agent.hasSlack
+  return !!agent.hasTelegram
+}
+
+function getProviderLabel() {
+  if (currentChannelProvider === 'discord') return 'Discord'
+  if (currentChannelProvider === 'slack') return 'Slack'
+  return 'Telegram'
+}
+
+// Connected-view help text per provider. Returns innerHTML for the
+// #chHowtoContent <div> -- swapped on every updateProviderUI() call so the
+// "Hogyan adj hozzá több embert vagy csoportot?" panel matches the active
+// channel provider.
+function buildHowtoHtml() {
+  if (currentChannelProvider === 'discord') {
+    return `
+      <p style="margin-top:0;"><strong>1. Új ember (DM) hozzáadása:</strong></p>
+      <ol style="padding-left:20px; margin-top:4px;">
+        <li>Add meg az illetőnek a bot Discord-handle-jét, vagy küldj neki a bot meghívó linkjéből.</li>
+        <li>Az illető DM-eli a botot egy üzenettel.</li>
+        <li>A bot egy 6-jegyű párosítási kódot küld a válaszban.</li>
+        <li>Az illető elküldi neked a kódot, te ide írod be és jóváhagyod (vagy a terminálban <code>/discord:access pair &lt;kód&gt;</code>).</li>
+      </ol>
+      <p style="margin-top:10px;"><strong>2. Discord szerver-csatorna hozzáadása:</strong></p>
+      <ol style="padding-left:20px; margin-top:4px;">
+        <li>Hívd meg a botot a Discord szervereadre (Discord Developer Portal &rarr; OAuth2 &rarr; URL Generator &rarr; <code>bot</code> scope).</li>
+        <li>A kívánt csatornában mention-eld a botot (<code>@bot</code>).</li>
+        <li>A csatorna jobbklikk &rarr; "Copy Channel ID"-vel másold ki az azonosítót.</li>
+        <li>Terminálban: <code>/discord:access group add &lt;channelId&gt;</code>.</li>
+      </ol>
+      <p style="margin-top:10px; color:var(--muted-foreground);"><em>Eltávolításhoz használd a Bekötött chat-ek listájában az X gombot.</em></p>
+    `
+  }
+  if (currentChannelProvider === 'slack') {
+    return `
+      <p style="margin-top:0;"><strong>1. Slack csatorna hozzáadása:</strong></p>
+      <ol style="padding-left:20px; margin-top:4px;">
+        <li>Add a botot a kívánt csatornához: a csatornában írd <code>/invite @botname</code>-t.</li>
+        <li>Mention-eld a botot egy üzenetben (<code>@botname segíts</code>).</li>
+        <li>A "Csatorna-kérések" listában jelenik meg a kérelem; hagyd jóvá.</li>
+      </ol>
+      <p style="margin-top:10px; color:var(--muted-foreground);"><em>DM-mel közvetlenül is írhatsz a botnak — nem kell külön párosítás.</em></p>
+    `
+  }
+  // telegram (default)
+  return `
+    <p style="margin-top:0;"><strong>1. Új ember (privát chat) hozzáadása:</strong></p>
+    <ol style="padding-left:20px; margin-top:4px;">
+      <li>Add meg az illetőnek a bot felhasználónevét (lent látható).</li>
+      <li>Az illető indítsa el a botot a Telegramban (<code>/start</code>) és írjon neki egy üzenetet.</li>
+      <li>A bot válaszol egy 6-jegyű párosítási kóddal.</li>
+      <li>Az illető elküldi neked a kódot, te ide írod be és jóváhagyod.</li>
+    </ol>
+    <p style="margin-top:10px;"><strong>2. Telegram csoport hozzáadása:</strong></p>
+    <ol style="padding-left:20px; margin-top:4px;">
+      <li>Hívd meg a botot egy meglévő Telegram csoportba (csoport beállítások &rarr; Tagok &rarr; Hozzáadás).</li>
+      <li>A csoportban írj <code>/pair</code>-t (vagy a bot által megadott parancsot).</li>
+      <li>Megjelenik egy párosítási kód a csoportban.</li>
+      <li>Másold be ide és hagyd jóvá. Ezután az ügynök fog tudni írni a csoportba és olvasni a tagok üzeneteit.</li>
+    </ol>
+    <p style="margin-top:10px; color:var(--muted-foreground);"><em>Eltávolításhoz használd a Bekötött chat-ek listájában az X gombot.</em></p>
+  `
+}
+
 function updateProviderUI() {
   const isTg = currentChannelProvider === 'telegram'
   const title = document.getElementById('chSetupTitle')
@@ -1883,6 +1981,9 @@ function updateProviderUI() {
   const manifestBtnGroup = document.getElementById('chSlackManifestBtnGroup')
   const smokeTestBtn = document.getElementById('chSmokeTestBtn')
   const reconnectBtn = document.getElementById('chReconnectBtn')
+  const howto = document.getElementById('chHowtoContent')
+  const pairingInfo = document.getElementById('chPairingInfo')
+  const discordChannelGroup = document.getElementById('chDiscordChannelIdGroup')
 
   if (isTg) {
     if (title) title.textContent = 'Telegram bot bekotese'
@@ -1892,14 +1993,18 @@ function updateProviderUI() {
     if (slackGroup) slackGroup.hidden = true
     if (manifestBtnGroup) manifestBtnGroup.hidden = true
     if (smokeTestBtn) smokeTestBtn.hidden = true
+    if (discordChannelGroup) discordChannelGroup.hidden = true
+    if (pairingInfo) pairingInfo.textContent = 'Ha valaki ír a botnak, a plugin egy kódot küld neki. Ide írd be a kódot a jóváhagyáshoz.'
   } else if (currentChannelProvider === 'discord') {
     if (title) title.textContent = 'Discord bot bekotese'
-    if (steps) steps.innerHTML = '<li>Menj a <strong>Discord Developer Portal</strong>-ra (discord.com/developers)</li><li>Hozz letre egy uj Application-t es Bot-ot</li><li>Masold be a Bot Token-t ide</li>'
+    if (steps) steps.innerHTML = '<li>Menj a <strong>Discord Developer Portal</strong>-ra (discord.com/developers)</li><li>Hozz letre egy uj Application-t es Bot-ot</li><li>Masold be a Bot Token-t ide</li><li>Másold be a kívánt szerver-csatorna ID-jét lent</li>'
     if (label) label.textContent = 'Bot Token'
     if (input) input.placeholder = 'MTIzNDU2Nzg5MDEyMzQ1Njc4OQ...'
     if (slackGroup) slackGroup.hidden = true
     if (manifestBtnGroup) manifestBtnGroup.hidden = true
     if (smokeTestBtn) smokeTestBtn.hidden = true
+    if (discordChannelGroup) discordChannelGroup.hidden = false
+    if (pairingInfo) pairingInfo.textContent = 'Ha valaki DM-eli a botot, egy párosítási kódot kap válaszul. Add meg a kódot a jóváhagyáshoz (vagy terminálban /discord:access pair <kód>).'
   } else {
     if (title) title.textContent = 'Slack app bekötése'
     if (steps) steps.innerHTML = '<li>Hozz létre egy Slack App-ot, vagy használd a manifest gombot lent</li><li>Másold be a Bot Token-t (xoxb-...) és az App Token-t (xapp-...)</li>'
@@ -1908,14 +2013,17 @@ function updateProviderUI() {
     if (slackGroup) slackGroup.hidden = false
     if (manifestBtnGroup) manifestBtnGroup.hidden = false
     if (smokeTestBtn) smokeTestBtn.hidden = false
+    if (discordChannelGroup) discordChannelGroup.hidden = true
+    if (pairingInfo) pairingInfo.textContent = 'A Slack csatorna-kérések fent a Csatorna-kérések listában jelennek meg.'
   }
+  if (howto) howto.innerHTML = buildHowtoHtml()
   if (reconnectBtn) {
-    reconnectBtn.hidden = !(currentAgent && currentAgent.running && currentAgent.hasTelegram)
+    reconnectBtn.hidden = !(currentAgent && currentAgent.running && agentIsConnected(currentAgent))
   }
 }
 
 function updateChannelTab(agent) {
-  const connected = agent.hasTelegram || false
+  const connected = agentIsConnected(agent)
   const running = agent.running || false
   document.getElementById('chNotConnected').hidden = connected
   document.getElementById('chConnected').hidden = !connected
@@ -1927,6 +2035,8 @@ function updateChannelTab(agent) {
   document.getElementById('chTokenInput').value = ''
   const slackInput = document.getElementById('chSlackAppToken')
   if (slackInput) slackInput.value = ''
+  const discordChanInput = document.getElementById('chDiscordChannelId')
+  if (discordChanInput) discordChanInput.value = ''
   updateProviderUI()
   if (connected && running) {
     refreshChannelHealth()
@@ -1980,6 +2090,9 @@ document.getElementById('chConnectBtn').addEventListener('click', async () => {
   if (currentChannelProvider === 'slack') {
     const appToken = document.getElementById('chSlackAppToken').value.trim()
     if (appToken) payload.appToken = appToken
+  } else if (currentChannelProvider === 'discord') {
+    const channelId = document.getElementById('chDiscordChannelId').value.trim()
+    if (channelId) payload.channelId = channelId
   }
 
   const btn = document.getElementById('chConnectBtn')
@@ -2005,7 +2118,7 @@ document.getElementById('chConnectBtn').addEventListener('click', async () => {
       throw new Error(err.error || 'Kapcsolodasi hiba')
     }
     const result = await res.json()
-    showToast(`${currentChannelProvider === 'telegram' ? 'Telegram' : 'Slack'} sikeresen csatlakoztatva!`)
+    showToast(`${getProviderLabel()} sikeresen csatlakoztatva!`)
     // Refresh detail
     await openAgentDetail(currentAgent.name)
     loadAgents()
@@ -2429,7 +2542,7 @@ document.getElementById('chApproveBtn').addEventListener('click', async () => {
 
 document.getElementById('chDisconnectBtn').addEventListener('click', async () => {
   if (!currentAgent) return
-  const provLabel = currentChannelProvider === 'telegram' ? 'Telegram' : 'Slack'
+  const provLabel = getProviderLabel()
   if (!confirm(`Biztosan levalasztod a ${provLabel} csatornat?`)) return
   try {
     await fetch(`${channelApiBase()}`, { method: 'DELETE' })

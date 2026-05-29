@@ -51,6 +51,7 @@ import {
   revokeInvite,
   agentChannelDir,
 } from '../channel-invites.js'
+import { hardRestartMarveenChannels } from '../channel-monitor.js'
 import {
   getProvider,
   channelStateDir,
@@ -550,10 +551,13 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   const setupMatch = matchChannelRoute(path, '')
   if (setupMatch && method === 'POST') {
     const [name, provider] = setupMatch
-    if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
+    const isMain = name === MAIN_AGENT_ID
+    // Marveen lives at PROJECT_ROOT, not under agents/marveen/ -- skip the
+    // dir check for the main agent and route writes to ~/.claude/channels/.
+    if (!isMain && !existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
 
     const body = await readBody(req)
-    const { botToken, appToken } = JSON.parse(body.toString()) as { botToken: string; appToken?: string }
+    const { botToken, appToken, channelId } = JSON.parse(body.toString()) as { botToken: string; appToken?: string; channelId?: string }
     if (!botToken?.trim()) { json(res, { error: 'botToken is required' }, 400); return true }
 
     const channelProvider = getProvider(provider)
@@ -577,12 +581,19 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       return true
     }
 
-    const stateDir = channelStateDir(provider, agentDir(name))
+    // Main agent's channel state lives under ~/.claude/channels/<provider>,
+    // sub-agents under agents/<name>/.claude/channels/<provider>.
+    const stateDir = isMain ? channelStateDir(provider) : channelStateDir(provider, agentDir(name))
     mkdirSync(stateDir, { recursive: true })
-    const tokenKey = provider === 'slack' ? 'SLACK_BOT_TOKEN' : 'TELEGRAM_BOT_TOKEN'
+    const tokenKey = provider === 'slack' ? 'SLACK_BOT_TOKEN'
+      : provider === 'discord' ? 'DISCORD_BOT_TOKEN'
+      : 'TELEGRAM_BOT_TOKEN'
     let envContent = `${tokenKey}=${botToken.trim()}\n`
     if (provider === 'slack' && appToken?.trim()) {
       envContent += `SLACK_APP_TOKEN=${appToken.trim()}\n`
+    }
+    if (provider === 'discord' && channelId?.trim()) {
+      envContent += `DISCORD_CHANNEL_ID=${channelId.trim()}\n`
     }
     atomicWriteFileSync(join(stateDir, '.env'), envContent, { mode: 0o600 })
     atomicWriteFileSync(join(stateDir, 'access.json'), JSON.stringify({
@@ -592,19 +603,28 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       pending: {},
     }, null, 2))
 
-    writeAgentChannelProvider(name, provider)
-    setAgentEnabledPlugins(name, provider)
-
-    if (provider === 'telegram') sendWelcomeMessage(name, botToken.trim()).catch(() => {})
-
-    const wasRunning = isAgentRunning(name)
+    // Main agent doesn't have an agent-config.json or enabled-plugins entry
+    // (the channels session reuses the system claude install), so skip the
+    // sub-agent-specific bookkeeping. Restart goes through the dedicated
+    // marveen-channels helper instead of the agent process lifecycle.
     let restarted = false
-    if (wasRunning) {
-      const stopRes = stopAgentProcess(name)
-      if (stopRes.ok) {
-        try { execSync('sleep 2', { timeout: 4000 }) } catch {}
-        const startRes = startAgentProcess(name)
-        restarted = startRes.ok
+    let wasRunning = false
+    if (isMain) {
+      const r = hardRestartMarveenChannels()
+      restarted = r.ok
+      wasRunning = true
+    } else {
+      writeAgentChannelProvider(name, provider)
+      setAgentEnabledPlugins(name, provider)
+      if (provider === 'telegram') sendWelcomeMessage(name, botToken.trim()).catch(() => {})
+      wasRunning = isAgentRunning(name)
+      if (wasRunning) {
+        const stopRes = stopAgentProcess(name)
+        if (stopRes.ok) {
+          try { execSync('sleep 2', { timeout: 4000 }) } catch {}
+          const startRes = startAgentProcess(name)
+          restarted = startRes.ok
+        }
       }
     }
 
@@ -954,7 +974,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   const chReqListMatch = path.match(/^\/api\/agents\/([^/]+)\/channel-requests$/)
   if (chReqListMatch && method === 'GET') {
     const name = decodeURIComponent(chReqListMatch[1])
-    if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
+    if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
     json(res, listPendingChannelRequests(name))
     return true
   }
@@ -963,7 +983,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   if (chReqApproveMatch && method === 'POST') {
     const name = decodeURIComponent(chReqApproveMatch[1])
     const reqId = Number(chReqApproveMatch[2])
-    if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
+    if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
 
     const body = await readBody(req)
     let opts: { requireMention?: boolean; allowFromAll?: boolean } = {}
@@ -1012,7 +1032,7 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
   if (chReqDenyMatch && method === 'POST') {
     const name = decodeURIComponent(chReqDenyMatch[1])
     const reqId = Number(chReqDenyMatch[2])
-    if (!existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
+    if (name !== MAIN_AGENT_ID && !existsSync(agentDir(name))) { json(res, { error: 'Agent not found' }, 404); return true }
     if (updateChannelRequestStatus(reqId, 'denied')) {
       json(res, { ok: true })
     } else {

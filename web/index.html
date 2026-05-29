@@ -1443,6 +1443,11 @@
               <label for="chSlackAppToken">App-Level Token (xapp-...)</label>
               <input type="text" id="chSlackAppToken" placeholder="xapp-1-...">
             </div>
+            <div class="form-group" id="chDiscordChannelIdGroup" hidden>
+              <label for="chDiscordChannelId">Discord Channel ID</label>
+              <input type="text" id="chDiscordChannelId" placeholder="1234567890123456789">
+              <small style="display:block;margin-top:4px;color:var(--text-muted);font-size:12px">Annak a server-csatornának az ID-je, amelyikbe a bot alapból ír. Discord &rarr; jobbklikk a csatornán &rarr; "Copy Channel ID" (Developer Mode kell hozzá).</small>
+            </div>
             <button class="btn-primary" id="chConnectBtn">
               <span class="btn-text">Összekapcsolás</span>
               <span class="btn-loading" hidden><span class="spinner"></span> Csatlakozas...</span>
@@ -1491,7 +1496,7 @@
               <h4>Új ember vagy csoport hozzáadása</h4>
               <details class="tg-howto" style="margin-bottom:12px;">
                 <summary style="cursor:pointer; font-weight:600;">Hogyan adj hozzá több embert vagy csoportot? &#9660;</summary>
-                <div style="padding:10px 0 0 0; font-size:13px; line-height:1.5;">
+                <div id="chHowtoContent" style="padding:10px 0 0 0; font-size:13px; line-height:1.5;">
                   <p style="margin-top:0;"><strong>1. Új ember (privát chat) hozzáadása:</strong></p>
                   <ol style="padding-left:20px; margin-top:4px;">
                     <li>Add meg az illetőnek a bot felhasználónevét (lent látható).</li>
@@ -1509,7 +1514,7 @@
                   <p style="margin-top:10px; color:var(--muted-foreground);"><em>Eltávolításhoz használd a Bekötött chat-ek listájában az X gombot.</em></p>
                 </div>
               </details>
-              <p class="tg-pairing-info">Ha valaki ír a botnak, a plugin egy kódot küld neki. Ide írd be a kódot a jóváhagyáshoz.</p>
+              <p class="tg-pairing-info" id="chPairingInfo">Ha valaki ír a botnak, a plugin egy kódot küld neki. Ide írd be a kódot a jóváhagyáshoz.</p>
               <div class="tg-pending-list" id="chPendingList"></div>
               <div class="form-row" style="gap:8px; align-items:flex-end; margin-top: 12px;">
                 <div class="form-group" style="flex:1; margin-bottom:0">
