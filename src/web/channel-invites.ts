@@ -225,6 +225,13 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
           access.dmPolicy = 'allowlist'
           writeAccess(accessPath, access)
         }
+        // No live invites but pendings may still exist -- operator needs
+        // a DM to know they have to /discord:access approve manually.
+        if (provider === 'discord' && name === mainAgentId && OPERATOR_DISCORD_USER_ID) {
+          const pendingEntries = Object.entries(access.pending || {})
+            .sort((a, b) => a[1].createdAt - b[1].createdAt)
+          if (pendingEntries.length > 0) notifyDiscordPendingsToOperator(accessPath, pendingEntries)
+        }
         continue
       }
 
