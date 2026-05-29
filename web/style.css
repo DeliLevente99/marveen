@@ -4780,3 +4780,179 @@ main {
   background: #1c1d22;
   color: #e8e8ec;
 }
+
+/* --- Messages page (inter-agent chat) --- */
+.msg-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Code', 'Consolas', monospace);
+}
+.msg-filters {
+  display: flex;
+  gap: 16px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+  align-items: end;
+  font-size: 13px;
+}
+.msg-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text-muted);
+}
+.msg-filters select {
+  padding: 6px 10px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-width: 160px;
+}
+.msg-auto-label {
+  flex-direction: row !important;
+  align-items: center;
+  cursor: pointer;
+}
+.msg-chat {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+}
+.msg-empty {
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 24px;
+  text-align: center;
+}
+.msg-bubble {
+  max-width: 70%;
+  background: var(--bg-input, #2b2d33);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  word-break: break-word;
+}
+.msg-bubble-agent {
+  align-self: flex-start;
+  border-bottom-left-radius: 2px;
+}
+.msg-bubble-system {
+  align-self: flex-end;
+  background: var(--accent, #3b5cff);
+  color: #fff;
+  border-bottom-right-radius: 2px;
+}
+.msg-bubble-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.msg-route {
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Code', 'Consolas', monospace);
+}
+.msg-meta {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+.msg-time {
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Code', 'Consolas', monospace);
+}
+.msg-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgba(255,255,255,0.12);
+}
+.msg-status-pending { background: #c08820; color: #fff; }
+.msg-status-delivered { background: #2a9d4a; color: #fff; }
+.msg-status-done { background: #1f6f3a; color: #fff; }
+.msg-status-failed { background: #c0303a; color: #fff; }
+.msg-bubble-body {
+  white-space: pre-wrap;
+}
+.msg-bubble-result {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed currentColor;
+  opacity: 0.7;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+.msg-fresh {
+  animation: msgFreshFade 1.5s ease-out;
+}
+@keyframes msgFreshFade {
+  0% { box-shadow: 0 0 0 2px var(--accent, #3b5cff); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.msg-compose {
+  margin-top: 16px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+}
+.msg-compose h3 {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.msg-compose-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.msg-compose-row select {
+  flex: 1;
+  padding: 6px 10px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.msg-arrow {
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, 'Cascadia Code', 'Consolas', monospace);
+}
+.msg-compose textarea {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-input, var(--bg-secondary));
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+  resize: vertical;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+.msg-compose-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.msg-send-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.msg-send-ok { color: #2a9d4a; }
+.msg-send-err { color: #c0303a; }

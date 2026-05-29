@@ -84,6 +84,7 @@ function switchPage(pageId) {
   if (pageId === 'autonomy') loadAutonomy()
   if (pageId === 'updates') loadUpdates()
   if (pageId === 'team') loadTeamGraph()
+  if (pageId === 'messages') startMessagesPage(); else stopMessagesPage()
 }
 
 navLinks.forEach((link) => {
@@ -7465,3 +7466,154 @@ async function setAutonomyLevel(key, level) {
     }
   })
 })()
+
+// ============================================================
+// === Messages page (inter-agent /api/messages bus chat UI) ===
+// ============================================================
+let messagesPollTimer = null
+let messagesKnownAgents = []
+let messagesLastIds = new Set()
+
+async function loadMessagesAgents() {
+  // Reuse the registry endpoint -- gives us the canonical name list.
+  try {
+    const r = await fetch('/api/agents/registry')
+    if (!r.ok) return
+    const arr = await r.json()
+    messagesKnownAgents = arr.map(e => e.name)
+    const filterSel = document.getElementById('msgFilterAgent')
+    const composeFromSel = document.getElementById('msgComposeFrom')
+    const composeToSel = document.getElementById('msgComposeTo')
+    const keep = (sel) => sel.value
+    const restore = (sel, val) => { if (val && [...sel.options].some(o => o.value === val)) sel.value = val }
+    const fVal = keep(filterSel), fromVal = keep(composeFromSel), toVal = keep(composeToSel)
+    filterSel.innerHTML = '<option value="">— mind —</option>' + messagesKnownAgents.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
+    composeFromSel.innerHTML = '<option value="">— küldő —</option><option value="operator">operator</option>' + messagesKnownAgents.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
+    composeToSel.innerHTML = '<option value="">— címzett —</option>' + messagesKnownAgents.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')
+    restore(filterSel, fVal); restore(composeFromSel, fromVal); restore(composeToSel, toVal)
+  } catch { /* keep stale dropdowns */ }
+}
+
+function relativeTimeShort(unixSec) {
+  const ageS = Math.max(0, Math.round(Date.now() / 1000 - unixSec))
+  if (ageS < 60) return ageS + 's'
+  if (ageS < 3600) return Math.round(ageS / 60) + 'm'
+  if (ageS < 86400) return Math.round(ageS / 3600) + 'h'
+  return Math.round(ageS / 86400) + 'd'
+}
+
+function statusBadgeClass(status) {
+  return 'msg-status-' + status
+}
+
+async function loadMessagesList() {
+  const filterAgent = document.getElementById('msgFilterAgent').value
+  const filterStatus = document.getElementById('msgFilterStatus').value
+  const statusEl = document.getElementById('msgStatus')
+  const chatEl = document.getElementById('msgChat')
+  try {
+    const params = new URLSearchParams()
+    params.set('limit', '100')
+    if (filterAgent) params.set('agent', filterAgent)
+    if (filterStatus === 'pending') params.set('status', 'pending')
+    const r = await fetch('/api/messages?' + params.toString())
+    if (!r.ok) {
+      statusEl.textContent = 'HTTP ' + r.status
+      return
+    }
+    let msgs = await r.json()
+    if (filterStatus && filterStatus !== 'pending') {
+      msgs = msgs.filter(m => m.status === filterStatus)
+    }
+    // /api/messages returns newest-first; render oldest-first chat-style.
+    msgs.reverse()
+    statusEl.textContent = msgs.length + ' üzenet'
+
+    const autoscroll = document.getElementById('msgAutoScroll').checked
+    const isAtBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 60
+
+    chatEl.innerHTML = msgs.length === 0
+      ? '<div class="msg-empty">Nincs üzenet a szűrt nézetben.</div>'
+      : msgs.map(m => {
+          const sideClass = m.from_agent === 'operator' || m.from_agent === 'system' ? 'msg-bubble-system' : 'msg-bubble-agent'
+          const fresh = !messagesLastIds.has(m.id) ? ' msg-fresh' : ''
+          const created = new Date(m.created_at * 1000).toLocaleString('hu-HU', { hour: '2-digit', minute: '2-digit', second: '2-digit', month: '2-digit', day: '2-digit' })
+          return `<div class="msg-bubble ${sideClass}${fresh}" data-id="${m.id}">
+            <div class="msg-bubble-head">
+              <span class="msg-route"><b>${escapeHtml(m.from_agent)}</b> → ${escapeHtml(m.to_agent)}</span>
+              <span class="msg-meta">
+                <span class="msg-badge ${statusBadgeClass(m.status)}">${m.status}</span>
+                <span class="msg-time" title="${escapeHtml(created)}">#${m.id} · ${relativeTimeShort(m.created_at)}</span>
+              </span>
+            </div>
+            <div class="msg-bubble-body">${escapeHtml(m.content)}</div>
+            ${m.result ? `<div class="msg-bubble-result">${escapeHtml(m.result)}</div>` : ''}
+          </div>`
+        }).join('')
+
+    messagesLastIds = new Set(msgs.map(m => m.id))
+    if (autoscroll && (isAtBottom || messagesLastIds.size > 0)) {
+      chatEl.scrollTop = chatEl.scrollHeight
+    }
+  } catch (err) {
+    statusEl.textContent = 'hiba: ' + (err && err.message ? err.message : String(err))
+  }
+}
+
+async function sendComposedMessage() {
+  const from = document.getElementById('msgComposeFrom').value.trim()
+  const to = document.getElementById('msgComposeTo').value.trim()
+  const content = document.getElementById('msgComposeContent').value.trim()
+  const sendStatus = document.getElementById('msgSendStatus')
+  const sendBtn = document.getElementById('msgSendBtn')
+  if (!from || !to || !content) {
+    sendStatus.textContent = 'kitöltés kell mind a háromra'
+    sendStatus.className = 'msg-send-status msg-send-err'
+    return
+  }
+  sendBtn.disabled = true
+  sendStatus.textContent = 'küldés…'
+  sendStatus.className = 'msg-send-status'
+  try {
+    const r = await fetch('/api/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, content }),
+    })
+    if (!r.ok) {
+      const body = await r.text()
+      sendStatus.textContent = 'HTTP ' + r.status + ' · ' + body.slice(0, 120)
+      sendStatus.className = 'msg-send-status msg-send-err'
+      return
+    }
+    const m = await r.json()
+    sendStatus.textContent = 'kész: id ' + m.id
+    sendStatus.className = 'msg-send-status msg-send-ok'
+    document.getElementById('msgComposeContent').value = ''
+    loadMessagesList()
+  } catch (err) {
+    sendStatus.textContent = 'hiba: ' + (err && err.message ? err.message : String(err))
+    sendStatus.className = 'msg-send-status msg-send-err'
+  } finally {
+    sendBtn.disabled = false
+  }
+}
+
+function startMessagesPage() {
+  loadMessagesAgents().then(() => loadMessagesList())
+  if (messagesPollTimer) return
+  messagesPollTimer = setInterval(loadMessagesList, 2000)
+}
+function stopMessagesPage() {
+  if (messagesPollTimer) { clearInterval(messagesPollTimer); messagesPollTimer = null }
+}
+
+document.getElementById('msgSendBtn')?.addEventListener('click', sendComposedMessage)
+document.getElementById('msgFilterAgent')?.addEventListener('change', loadMessagesList)
+document.getElementById('msgFilterStatus')?.addEventListener('change', loadMessagesList)
+document.getElementById('msgComposeContent')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault()
+    sendComposedMessage()
+  }
+})

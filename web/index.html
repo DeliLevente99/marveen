@@ -28,6 +28,10 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         <span class="sb-label">Ügynökök</span>
       </a>
+      <a href="#" class="sb-link" data-page="messages">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="sb-label">Üzenetek</span>
+      </a>
       <a href="#" class="sb-link" data-page="team">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="3"/><path d="M12 8v4"/><circle cx="5" cy="18" r="3"/><circle cx="19" cy="18" r="3"/><path d="M12 12l-7 6M12 12l7 6"/></svg>
         <span class="sb-label">Csapat</span>
@@ -194,6 +198,62 @@
           </div>
           <span>Új ügynök</span>
         </button>
+      </div>
+    </div>
+
+    <!-- === Messages (inter-agent /api/messages) === -->
+    <div class="page" id="messagesPage" hidden>
+      <div class="page-header">
+        <div class="page-header-row">
+          <div>
+            <h1>Üzenetek</h1>
+            <p class="subtitle">Inter-agent /api/messages bus &mdash; 2 másodpercenként frissül</p>
+          </div>
+          <div class="msg-status" id="msgStatus">betöltés…</div>
+        </div>
+        <div class="msg-filters">
+          <label>Ágens
+            <select id="msgFilterAgent">
+              <option value="">— mind —</option>
+            </select>
+          </label>
+          <label>Státusz
+            <select id="msgFilterStatus">
+              <option value="">— mind —</option>
+              <option value="pending">pending</option>
+              <option value="delivered">delivered</option>
+              <option value="done">done</option>
+              <option value="failed">failed</option>
+            </select>
+          </label>
+          <label class="msg-auto-label">
+            <input type="checkbox" id="msgAutoScroll" checked>
+            Auto-görgetés az aljára
+          </label>
+        </div>
+      </div>
+
+      <div class="msg-chat" id="msgChat">
+        <div class="msg-empty">betöltés…</div>
+      </div>
+
+      <div class="msg-compose">
+        <h3>Új üzenet</h3>
+        <div class="msg-compose-row">
+          <select id="msgComposeFrom">
+            <option value="">— küldő —</option>
+            <option value="operator">operator</option>
+          </select>
+          <span class="msg-arrow">→</span>
+          <select id="msgComposeTo">
+            <option value="">— címzett —</option>
+          </select>
+        </div>
+        <textarea id="msgComposeContent" rows="3" placeholder="Üzenet tartalma…"></textarea>
+        <div class="msg-compose-actions">
+          <button class="btn-primary btn-compact" id="msgSendBtn">Küldés</button>
+          <span class="msg-send-status" id="msgSendStatus"></span>
+        </div>
       </div>
     </div>
 
