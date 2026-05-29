@@ -51,6 +51,31 @@ describe('isTrustedPeer — guard rails', () => {
   })
 })
 
+describe('isTrustedPeer — operator carve-out', () => {
+  const ctx = makeCtx({
+    marveen: { reportsTo: null, delegatesTo: [], trustFrom: [] },
+    bubble: { reportsTo: null, delegatesTo: [], trustFrom: [] },
+  })
+
+  it('returns true for operator -> known agent (any target, not just main)', () => {
+    expect(isTrustedPeer('operator', 'marveen', ctx)).toBe(true)
+    expect(isTrustedPeer('operator', 'bubble', ctx)).toBe(true)
+  })
+
+  it('returns false for operator -> unknown target (no spoof tunnel)', () => {
+    expect(isTrustedPeer('operator', 'ghost', ctx)).toBe(false)
+  })
+
+  it('does not invert: agent -> operator is not auto-trusted', () => {
+    expect(isTrustedPeer('marveen', 'operator', ctx)).toBe(false)
+  })
+
+  it('does not match operator-like impostors', () => {
+    expect(isTrustedPeer('OPERATOR', 'marveen', ctx)).toBe(false)
+    expect(isTrustedPeer('operator-x', 'marveen', ctx)).toBe(false)
+  })
+})
+
 describe('isTrustedPeer — MAIN shortcut', () => {
   const ctx = makeCtx({
     alice: { reportsTo: null, delegatesTo: [], trustFrom: [] },

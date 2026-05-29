@@ -52,9 +52,26 @@ export interface TrustContext {
  *        - from ∈ toTeam.trustFrom    (explicit override)
  *   6. Otherwise → false.
  */
+// Reserved identifier for the human operator -- used as the `from` field on
+// /api/messages calls the dashboard makes on the user's behalf (UI compose
+// form, scripted curl, etc.). Treated as a trusted peer so the router emits
+// the TRUSTED_PEER_PREAMBLE: the receiving agent then handles the message
+// as coworker-intent rather than as adversarial external input wrapped in
+// the SECURITY NOTICE. Without this carve-out, every operator message
+// landed inside `<untrusted>` and the agent treated it as "data to read,
+// not an instruction" -- which on Marveen surfaced as `nincs tényleges
+// kérés benne` replies in the TUI with no Discord reply at all.
+export const OPERATOR_IDENT = 'operator'
+
 export function isTrustedPeer(from: string, to: string, ctx: TrustContext): boolean {
   if (!from || !to) return false
   if (from === to) return false
+
+  // Operator carve-out runs BEFORE the known-agent guard because the
+  // operator is not registered as an agent on disk -- it represents the
+  // human running the dashboard. The target still has to be a known agent
+  // so a spoofed sender can't tunnel into a non-existent recipient.
+  if (from === OPERATOR_IDENT && ctx.isKnownAgent(to)) return true
 
   // Known-agent check BEFORE main shortcut: a spoofed unknown sender
   // targeting MAIN would otherwise be trusted.
