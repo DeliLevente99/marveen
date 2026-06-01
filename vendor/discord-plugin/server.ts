@@ -289,14 +289,17 @@ async function gate(msg: Message): Promise<GateResult> {
   if (!policy) return { action: 'drop' }
   const groupAllowFrom = policy.allowFrom ?? []
   const requireMention = policy.requireMention ?? true
-  if (groupAllowFrom.length > 0 && !groupAllowFrom.includes(senderId)) {
-    // MARVEEN-PATCH: server-channel pending. When dmPolicy is 'pairing'
-    // and the sender isn't on the per-channel allowlist, mint a pending
-    // entry (just like the DM branch) so the out-of-band operator-notify
-    // path can prompt the operator to approve. The pending row carries
-    // `groupChannelId` so the approve flow knows to mutate
-    // `groups[channelId].allowFrom` instead of the top-level allowFrom.
-    if (access.dmPolicy !== 'pairing') return { action: 'drop' }
+  // MARVEEN-PATCH: server-channel pending. In 'pairing' mode any sender
+  // not on the per-channel allowlist must go through approval -- INCLUDING
+  // when the allowlist is still empty (fresh bootstrap writes
+  // `allowFrom: []`). The earlier `groupAllowFrom.length > 0` guard let an
+  // empty allowlist fall straight through to `deliver` (with
+  // requireMention:false that served EVERYONE without operator approval).
+  // We now gate on membership alone; pairing mode mints a pending so the
+  // out-of-band operator-notify path can prompt the operator. The pending
+  // row carries `groupChannelId` so the approve flow mutates
+  // `groups[channelId].allowFrom` instead of the top-level allowFrom.
+  if (!groupAllowFrom.includes(senderId) && access.dmPolicy === 'pairing') {
     // Re-pair guard: same sender + same channel → bump replies (don't
     // hammer the operator with notify spam on chatty users).
     for (const [code, p] of Object.entries(access.pending)) {
@@ -322,6 +325,12 @@ async function gate(msg: Message): Promise<GateResult> {
     }
     saveAccess(access)
     return { action: 'pair', code, isResend: false }
+  }
+  // Non-pairing modes keep the original allowlist semantics: a non-empty
+  // per-channel allowlist that excludes the sender means drop. (Empty
+  // allowlist = no per-channel restriction, fall through to requireMention.)
+  if (access.dmPolicy !== 'pairing' && groupAllowFrom.length > 0 && !groupAllowFrom.includes(senderId)) {
+    return { action: 'drop' }
   }
   if (requireMention && !(await isMentioned(msg, access.mentionPatterns))) {
     return { action: 'drop' }
