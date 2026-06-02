@@ -809,6 +809,40 @@ else
   echo -e "  ${DIM}cd $INSTALL_DIR && claude plugin enable ${PLUGIN_ID} --scope project${NC}"
 fi
 
+# Managed-settings allowlist (Slack + Discord).
+# A claude session a beerkezo MCP-ertesiteseket egy MASODIK kapun is
+# atengedi: /etc/claude-code/managed-settings.json allowedChannelPlugins.
+# Ha az aktiv provider plugin-ja nincs a listan, a session CSENDBEN
+# eldobja a beerkezo uzeneteket -- a bot online, de soha nem valaszol,
+# pending sem keletkezik, az operator nem kap parositas-ertesitest.
+# Telegram nem erzekeny erre a telepitesi utvonalon; Slack es Discord igen.
+if [ "$CHANNEL_PROVIDER" = "discord" ] || [ "$CHANNEL_PROVIDER" = "slack" ]; then
+  MS_PATH="/etc/claude-code/managed-settings.json"
+  echo -e "  managed-settings allowlist beallitasa ($CHANNEL_PROVIDER plugin)..."
+  MS_MERGE='import json,sys
+new=json.loads(sys.stdin.read())
+try:
+  data=json.load(open("'"$MS_PATH"'"))
+except:
+  data={}
+data["channelsEnabled"]=True
+ex=data.get("allowedChannelPlugins",[])
+for e in new["allowedChannelPlugins"]:
+  if not any(p.get("plugin")==e["plugin"] and p.get("marketplace")==e["marketplace"] for p in ex):
+    ex.append(e)
+data["allowedChannelPlugins"]=ex
+print(json.dumps(data,indent=2))'
+  MS_PAYLOAD='{"allowedChannelPlugins":[{"plugin":"slack-channel","marketplace":"marveen-marketplace"},{"plugin":"telegram","marketplace":"claude-plugins-official"},{"plugin":"discord","marketplace":"claude-plugins-official"}]}'
+  if sudo mkdir -p /etc/claude-code 2>/dev/null && \
+     echo "$MS_PAYLOAD" | sudo python3 -c "$MS_MERGE" | sudo tee "$MS_PATH" >/dev/null 2>&1; then
+    ok "managed-settings allowlist beallitva ($MS_PATH)"
+  else
+    warn "managed-settings allowlist beallitas sikertelen (sudo szukseges). Futtasd kezzel:"
+    echo -e "  ${DIM}echo '$MS_PAYLOAD' | sudo python3 -c '<merge>' | sudo tee $MS_PATH${NC}"
+    echo -e "  ${DIM}E nelkul a bot online lesz, de a beerkezo uzeneteket csendben eldobja.${NC}"
+  fi
+fi
+
 # skill-factory telepitese (self-learning meta-skill)
 SKILLS_DIR="$HOME/.claude/skills"
 if [ -d "$INSTALL_DIR/skills/skill-factory" ]; then

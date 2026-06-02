@@ -114,9 +114,18 @@ function matchChannelRoute(path: string, suffix: string): [string, ChannelProvid
 const MANAGED_SETTINGS_PATH = platform() === 'darwin'
   ? '/Library/Application Support/ClaudeCode/managed-settings.json'
   : '/etc/claude-code/managed-settings.json'
-const SLACK_ALLOWLIST_ENTRY = { plugin: 'slack-channel', marketplace: 'marveen-marketplace' }
+// Per-provider managed-settings allowlist entries. The session's inbound
+// MCP-notification gate (allowedChannelPlugins) must list the active
+// provider's plugin or the session SILENTLY DROPS inbound channel
+// messages -- no pending, no operator-notify. Discord uses the official
+// marketplace (like telegram); slack uses the marveen marketplace.
+const ALLOWLIST_ENTRIES: Record<ChannelProviderType, { plugin: string; marketplace: string }> = {
+  slack: { plugin: 'slack-channel', marketplace: 'marveen-marketplace' },
+  telegram: { plugin: 'telegram', marketplace: 'claude-plugins-official' },
+  discord: { plugin: 'discord', marketplace: 'claude-plugins-official' },
+}
 
-export function isManagedSettingsReady(): boolean {
+export function isManagedSettingsReady(provider: ChannelProviderType = 'slack'): boolean {
   if (!existsSync(MANAGED_SETTINGS_PATH)) return false
   try {
     const data = JSON.parse(readFileSync(MANAGED_SETTINGS_PATH, 'utf-8')) as {
@@ -124,9 +133,10 @@ export function isManagedSettingsReady(): boolean {
       allowedChannelPlugins?: Array<{ plugin: string; marketplace: string }>
     }
     if (!data.channelsEnabled) return false
+    const entry = ALLOWLIST_ENTRIES[provider]
     const plugins = data.allowedChannelPlugins ?? []
     return plugins.some(
-      p => p.plugin === SLACK_ALLOWLIST_ENTRY.plugin && p.marketplace === SLACK_ALLOWLIST_ENTRY.marketplace
+      p => p.plugin === entry.plugin && p.marketplace === entry.marketplace
     )
   } catch {
     return false
@@ -145,10 +155,13 @@ export function getManagedSettingsSudoCommand(): string {
     'data["allowedChannelPlugins"] = existing',
     'print(json.dumps(data, indent=2))',
   ].join('\n')
+  // Seed all known providers so the operator only ever runs this once,
+  // regardless of which channel they configure now or later.
   const payload = JSON.stringify({
     allowedChannelPlugins: [
-      SLACK_ALLOWLIST_ENTRY,
-      { plugin: 'telegram', marketplace: 'claude-plugins-official' },
+      ALLOWLIST_ENTRIES.slack,
+      ALLOWLIST_ENTRIES.telegram,
+      ALLOWLIST_ENTRIES.discord,
     ],
   })
   const escapedScript = mergeScript.replace(/'/g, "'\\''")
@@ -570,13 +583,21 @@ export async function tryHandleAgents(ctx: RouteContext, webDir: string): Promis
       return true
     }
 
-    if (provider === 'slack' && !isManagedSettingsReady()) {
+    // Slack and Discord both gate inbound MCP notifications through
+    // managed-settings.json's allowedChannelPlugins; without their entry
+    // the session silently drops inbound messages (no pending, no
+    // operator-notify). Block setup until the operator runs the sudo
+    // command so the failure mode is loud, not silent.
+    if ((provider === 'slack' || provider === 'discord') && !isManagedSettingsReady(provider)) {
       const displayName = readAgentDisplayName(name) || name
       json(res, {
         error: 'managed-settings-missing',
         sudoCommand: getManagedSettingsSudoCommand(),
-        slackAppManifest: generateSlackAppManifest(displayName),
-        slackAppInstructions: getSlackAppSetupInstructions(),
+        // Slack-only setup aids; omit for Discord (irrelevant there).
+        ...(provider === 'slack' ? {
+          slackAppManifest: generateSlackAppManifest(displayName),
+          slackAppInstructions: getSlackAppSetupInstructions(),
+        } : {}),
       }, 409)
       return true
     }
