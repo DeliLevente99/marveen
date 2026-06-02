@@ -20,10 +20,23 @@
 //  - the group entry is already present (idempotent)
 import { existsSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { CHANNEL_PROVIDER, CHANNEL_CHAT_ID } from '../config.js'
+import { CHANNEL_PROVIDER, CHANNEL_CHAT_ID, PROJECT_ROOT } from '../config.js'
 import { channelStateDir } from '../channel-provider.js'
 import { atomicWriteFileSync } from './atomic-write.js'
 import { logger } from '../logger.js'
+
+// Dynamic re-read of OPERATOR_DISCORD_USER_ID from project .env (the
+// operator may set it via the dashboard after boot, so the boot-cached
+// config constant can be stale). Mirrors channel-invites.ts.
+function readOperatorDiscordUserId(): string {
+  try {
+    const content = readFileSync(join(PROJECT_ROOT, '.env'), 'utf-8')
+    const m = content.match(/^OPERATOR_DISCORD_USER_ID=(.+)$/m)
+    return (m?.[1] ?? '').trim()
+  } catch {
+    return ''
+  }
+}
 
 interface AccessFile {
   dmPolicy?: 'pairing' | 'allowlist' | 'disabled'
@@ -53,12 +66,45 @@ export function ensureDiscordChannelGroup(): void {
   }
 
   access.groups = access.groups ?? {}
-  if (CHANNEL_CHAT_ID in access.groups) return
+  const operatorId = readOperatorDiscordUserId()
 
-  access.groups[CHANNEL_CHAT_ID] = { requireMention: false, allowFrom: [] }
+  // Create the channel group entry if missing.
+  let changed = false
+  if (!(CHANNEL_CHAT_ID in access.groups)) {
+    access.groups[CHANNEL_CHAT_ID] = { requireMention: false, allowFrom: [] }
+    changed = true
+    logger.info({ channelId: CHANNEL_CHAT_ID }, 'discord-group-bootstrap: added channel to access.groups')
+  }
+
+  // Seed the operator into the channel's allowFrom so the operator is
+  // served immediately in the server channel (the gate checks the
+  // per-channel allowFrom, NOT the top-level one). Without this the
+  // operator's own messages land in `pending` -- and the operator-notify
+  // path skips the operator (won't DM themselves), so it looks like the
+  // bot ignores everyone. Idempotent; runs even when the group already
+  // exists so existing installs get healed on next boot.
+  if (operatorId) {
+    const grp = access.groups[CHANNEL_CHAT_ID]
+    grp.allowFrom = grp.allowFrom ?? []
+    if (!grp.allowFrom.includes(operatorId)) {
+      grp.allowFrom.push(operatorId)
+      changed = true
+      logger.info({ channelId: CHANNEL_CHAT_ID, operatorId }, 'discord-group-bootstrap: seeded operator into channel allowFrom')
+    }
+    // Drop any stale pending the operator accumulated before this fix.
+    if (access.pending) {
+      for (const [code, p] of Object.entries(access.pending)) {
+        if ((p as { senderId?: string }).senderId === operatorId) {
+          delete access.pending[code]
+          changed = true
+        }
+      }
+    }
+  }
+
+  if (!changed) return
   mkdirSync(dir, { recursive: true })
   atomicWriteFileSync(path, JSON.stringify(access, null, 2))
-  logger.info({ channelId: CHANNEL_CHAT_ID }, 'discord-group-bootstrap: added channel to access.groups')
 }
 
 // Ensure the plugin's .env carries DISCORD_SUPPRESS_PAIRING_REPLY=1 so
