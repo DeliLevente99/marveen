@@ -8504,6 +8504,24 @@ window.addEventListener('resize', () => {
     document.getElementById('discordApproveSender').textContent = entry.senderId
     document.getElementById('discordApproveExpires').textContent = fmtRemainingMs(entry.expiresAt)
 
+    // Fill the description with the real bot name + request source instead
+    // of the hardcoded "Marveen / DM" text. Botname comes from /api/marveen
+    // (best-effort); source (server channel vs private DM) from the token
+    // entry's groupChannelId when present.
+    const descEl = document.querySelector('#discordApproveOverlay .modal-desc')
+    if (descEl) {
+      let botName = ''
+      try {
+        const m = await fetch('/api/marveen').then(r => r.ok ? r.json() : null)
+        botName = (m && m.name) || ''
+      } catch { /* ignore */ }
+      const botPart = botName ? `a(z) ${botName} bothoz` : 'a bothoz'
+      const wherePart = entry.groupChannelId
+        ? ' (szerver csatornában)'
+        : ' (privát üzenetben)'
+      descEl.textContent = `Új Discord felhasználó kér hozzáférést ${botPart}${wherePart}.`
+    }
+
     // Live countdown until expiry; disable confirm when it runs out.
     const tick = setInterval(() => {
       const span = document.getElementById('discordApproveExpires')

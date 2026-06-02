@@ -319,10 +319,17 @@ function notifyDiscordPendingsToOperator(
     const dashboardToken = (() => { try { return loadOrCreateDashboardToken() } catch { return '' } })()
     const approveToken = mintApproveToken(code, entry.senderId)
     const url = `http://${WEB_HOST}:${WEB_PORT}/?token=${dashboardToken}&approve_token=${approveToken}`
-    const context = entry.groupChannelId
-      ? `szerver csatorna <#${entry.groupChannelId}>`
-      : 'DM'
-    const text = `Új ${context} kéri user@${entry.senderId} (code: ${code}). Jóváhagyás (5 perc): ${url}`
+    // Make the source unambiguous: a server-channel request reads very
+    // differently from a private DM request. The old "Új <context> kéri
+    // user@..." phrasing sounded like someone was DMing privately even
+    // when the request came from a public channel.
+    const where = entry.groupChannelId
+      ? `a(z) <#${entry.groupChannelId}> csatornában`
+      : 'privát üzenetben (DM)'
+    const text =
+      `<@${entry.senderId}> hozzáférést kér ${where}. ` +
+      `Engedélyezed, hogy a bot válaszoljon neki? ` +
+      `Jóváhagyás (5 percig él): ${url}`
     // Fire-and-forget so a Discord API stall doesn't block the tick.
     // notified.add stays in the promise chain so a failed call retries
     // on the next 3s tick.

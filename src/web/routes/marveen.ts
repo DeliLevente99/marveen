@@ -157,7 +157,17 @@ export async function tryHandleMarveen(ctx: RouteContext, webDir: string): Promi
   if (peekMatch && method === 'GET') {
     const entry = peekApproveToken(peekMatch[1])
     if (!entry) { json(res, { error: 'token unknown or expired' }, 404); return true }
-    json(res, { code: entry.code, senderId: entry.senderId, expiresAt: entry.expiresAt })
+    // Look up the pending row to tell the UI whether this is a server-
+    // channel or a private-DM request (groupChannelId present => channel).
+    let groupChannelId: string | undefined
+    try {
+      const accessPath = join(channelStateDir('discord'), 'access.json')
+      const access = JSON.parse(readFileOr(accessPath, '{}')) as {
+        pending?: Record<string, { groupChannelId?: string }>
+      }
+      groupChannelId = access.pending?.[entry.code]?.groupChannelId
+    } catch { /* best-effort; UI falls back to generic wording */ }
+    json(res, { code: entry.code, senderId: entry.senderId, expiresAt: entry.expiresAt, groupChannelId })
     return true
   }
 
