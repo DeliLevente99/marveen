@@ -99,18 +99,8 @@ INSTALL_STEP="prerequisites"
 # ─────────────────────────────────────────────
 echo -e "${BOLD}[1/7] Elofeltetelek ellenorzese...${NC}"
 
-# Csomagkezelo detektalas: apt-get (Debian/Ubuntu) vagy dnf (Fedora/Nobara/RHEL).
-# A kesobbi telepito agak PKG_MANAGER alapjan valasztanak parancsot es csomagnevet.
-PKG_MANAGER=""
-if command -v apt-get &>/dev/null; then
-  PKG_MANAGER="apt"
-elif command -v dnf &>/dev/null; then
-  PKG_MANAGER="dnf"
-elif command -v yum &>/dev/null; then
-  PKG_MANAGER="yum"
-fi
-if [ -z "$PKG_MANAGER" ]; then
-  fail "Nem tamogatott csomagkezelo. Ez a telepito apt-get (Debian/Ubuntu) vagy dnf/yum (Fedora/Nobara/RHEL) rendszert var."
+if ! command -v apt-get &>/dev/null; then
+  fail "Ez a telepito csak Ubuntu/Debian rendszeren fut (apt-get szukseges)"
 fi
 
 # RAM check: npm build can fail on low-memory instances (e.g. t3.micro)
@@ -162,39 +152,22 @@ $NODE_OK || MISSING_PKGS="$MISSING_PKGS nodejs"
 
 if [ -n "$MISSING_PKGS" ]; then
   warn "Hianyzo csomagok:$MISSING_PKGS"
-  echo -e "  Telepites sudo-val ($PKG_MANAGER)..."
-  if [ "$PKG_MANAGER" = "apt" ]; then
-    if echo "$MISSING_PKGS" | grep -q nodejs; then
-      echo -e "  Node.js v22 repo hozzaadasa (nodesource)..."
-      curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null 2>&1
-    else
-      sudo apt-get update -qq
-    fi
-    # shellcheck disable=SC2086
-    sudo apt-get install -y $MISSING_PKGS -qq
+  echo -e "  Telepites sudo-val..."
+  if echo "$MISSING_PKGS" | grep -q nodejs; then
+    echo -e "  Node.js v22 repo hozzaadasa (nodesource)..."
+    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >/dev/null 2>&1
   else
-    # dnf/yum (Fedora/Nobara/RHEL). A disztro nodejs csomagja v20+ az aktualis
-    # kiadasokon, es az npm-et is tartalmazza -- nincs szukseg kulso repora.
-    # Csomagnevek megegyeznek a Debian-belivel (ffmpeg/git/tmux/lsof/curl/
-    # python3/pipx/unzip/nodejs). Az ffmpeg-hez Fedoran az RPM Fusion repo
-    # kellhet; ha mar engedelyezve van, a csomag elerheto.
-    # shellcheck disable=SC2086
-    sudo "$PKG_MANAGER" install -y $MISSING_PKGS
+    sudo apt-get update -qq
   fi
+  # shellcheck disable=SC2086
+  sudo apt-get install -y $MISSING_PKGS -qq
 fi
 
 hash -r
 
 # Ellenorzes: node es npm tenyleg elerheto-e
-if [ "$PKG_MANAGER" = "apt" ]; then
-  NODE_FIX_HINT="sudo apt-get install nodejs"
-  NPM_FIX_HINT="dpkg -l nodejs"
-else
-  NODE_FIX_HINT="sudo $PKG_MANAGER install nodejs"
-  NPM_FIX_HINT="sudo $PKG_MANAGER install nodejs npm"
-fi
-command -v node &>/dev/null || fail "Node.js telepitese sikertelen. Ellenorizd: $NODE_FIX_HINT"
-command -v npm &>/dev/null || fail "npm nem talalhato a nodejs csomag utan sem. Ellenorizd: $NPM_FIX_HINT"
+command -v node &>/dev/null || fail "Node.js telepitese sikertelen. Ellenorizd: sudo apt-get install nodejs"
+command -v npm &>/dev/null || fail "npm nem talalhato a nodejs csomag utan sem. Ellenorizd: dpkg -l nodejs"
 
 ok "ffmpeg $(ffmpeg -version | awk 'NR==1 {print $3}')"
 ok "git $(git --version | awk '{print $3}')"
