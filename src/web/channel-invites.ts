@@ -210,7 +210,13 @@ export function runInviteMonitorTick(mainAgentId: string, agentsRoot: string): v
     for (const { name, accessPath } of targets) {
       const invitesPath = invitesPathFor(accessPath)
       const store = readInvites(invitesPath)
-      if (!store.invites) continue
+      // Discord has no invites.json (the install seeds invites only for
+      // Telegram), but its pendings still need the operator-notify path.
+      // So DON'T bail on a missing invites store -- treat it as empty and
+      // fall through to the no-live-invites branch, which carries the
+      // Discord notification logic. Telegram/Slack with a real store keep
+      // their auto-approve behaviour below.
+      if (!store.invites) store.invites = {}
 
       const access = readAccess(accessPath)
       const now = Date.now()
