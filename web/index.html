@@ -187,6 +187,10 @@
             <h1>Csapat</h1>
             <p class="subtitle">AI csapattagok kezelése</p>
           </div>
+          <div class="header-actions">
+            <button class="btn-secondary btn-compact" id="importAgentBtn">Ügynök importálása</button>
+            <input type="file" id="importAgentFile" accept=".gz,.tgz,application/gzip" hidden>
+          </div>
         </div>
       </div>
       <div class="agents-grid" id="agentsGrid">
@@ -1539,6 +1543,7 @@
 
         <!-- Bottom actions -->
         <div class="detail-actions agent-detail-bottom" id="agentDetailActions">
+          <button class="btn-secondary" id="exportAgentBtn">Exportálás</button>
           <button class="btn-danger" id="deleteAgentBtn">Törlés</button>
         </div>
       </div>
